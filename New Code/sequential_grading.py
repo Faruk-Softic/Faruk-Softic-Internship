@@ -18,12 +18,17 @@ from typing import Optional
 
 # If needed, configure paths here
 
-API_KEY_FILE     = r"C:\Users\fsoft\Desktop\api_key.txt"
-PAPERS_FOLDER    = r"C:\Users\fsoft\Desktop\Za Internship - code\Papers"
-RUBRIC_ORIGINAL  = r"C:\Users\fsoft\Desktop\Za Internship - code\Rubric_original.docx"
-RUBRIC_IMPROVED  = r"C:\Users\fsoft\Desktop\Za Internship - code\Rubric_improved.docx"
-PIPELINES_FILE   = r"C:\Users\fsoft\Desktop\Za Internship - code\pipelines.json"
-RESULTS_CSV      = r"C:\Users\fsoft\Desktop\Za Internship - code\results.csv"
+API_KEY_FILE        = r"C:\Users\fsoft\Desktop\api_key.txt"
+PAPERS_FOLDER       = r"C:\Users\fsoft\Desktop\Za Internship - code\Papers"
+RUBRIC_ORIGINAL     = r"C:\Users\fsoft\Desktop\Za Internship - code\Rubric_original.docx"
+RUBRIC_IMPROVED     = r"C:\Users\fsoft\Desktop\Za Internship - code\Rubric_improved.docx"
+WRITING_GUIDE       = r"C:\Users\fsoft\Desktop\Za Internship - code\Writing_guide.pdf"
+SAMPLE_RESULTS      = r"C:\Users\fsoft\Desktop\Za Internship - code\Sample_results.pdf"
+CALIBRATION_PAPER   = r"C:\Users\fsoft\Desktop\Za Internship - code\Calibration_paper.docx"
+CALIBRATION_SUMMARY = r"C:\Users\fsoft\Desktop\Za Internship - code\Calibration_summary.docx"
+PIPELINES_FILE      = r"C:\Users\fsoft\Desktop\Za Internship - code\pipelines.json"
+RESULTS_CSV         = r"C:\Users\fsoft\Desktop\Za Internship - code\results.csv"
+
 # If needed, change number of runs here
 
 N_RUNS = 5
@@ -31,18 +36,28 @@ N_RUNS = 5
 SECTION_ORDER = ["introduction", "methods", "results", "discussion"]
 
 IMPROVED_WEIGHTS = {
-    "introduction":   0.285,
-    "methods":        0.190,
-    "results":        0.190,
-    "discussion":     0.285,
-    "language_style": 0.050,
+    "introduction":   0.30,
+    "methods":        0.15,
+    "results":        0.15,
+    "discussion":     0.30,
+    "language_style": 0.10,
 }
 
 # Role description used in every prompt
 LLM_ROLE = (
     "You are a tutor for a course designed to teach second-year psychology students "
     "how to write scientific papers, with a particular focus on scientific reasoning "
-    "and argumentation."
+    "and argumentation. "
+    "Keep in mind that this is the first scientific article-like paper that the student "
+    "has written, having only some experience with writing a brief literature review that "
+    "included about four studies beforehand. Finally, keep in mind the writing guide, "
+    "sample paper and rubrics when grading the paper. Even if it seems like it is missing "
+    "parts that would be expected in a publishable paper, your benchmark for what is "
+    "considered complete should be those three sources. If you are deciding whether to fail "
+    "a student or not, ask yourself if you think the student would be able to receive a "
+    "passing grade for writing a bachelor's thesis the following year, assuming the same "
+    "knowledge and skills for writing - if you think they would not be able to do so, "
+    "then failing them is appropriate."
 )
 
 
@@ -160,7 +175,7 @@ def check_token_count(text: str, label: str = "") -> int:
     return n
 
 
-# This part loads both rubrics files and keeps them in memory
+# This part loads rubric files and all additional resources, keeps them in memory
 
 def load_rubrics() -> dict[str, str]:
     """
@@ -176,6 +191,33 @@ def load_rubrics() -> dict[str, str]:
         n = check_token_count(text, label=f"rubric_{name}")
         print(f"  ✓ Rubric '{name}' loaded ({n} tokens).")
     return rubrics
+
+
+def load_resources() -> dict[str, str]:
+    """
+    Load the writing guide, sample results section, calibration paper, and
+    calibration summary once and keep them in memory.
+    Hard error if any file is missing or exceeds the token limit.
+    """
+    print("Loading additional resources into memory cache...")
+    resources: dict[str, str] = {}
+
+    file_map = {
+        "writing_guide":       (WRITING_GUIDE,       read_pdf),
+        "sample_results":      (SAMPLE_RESULTS,      read_pdf),
+        "calibration_paper":   (CALIBRATION_PAPER,   read_docx),
+        "calibration_summary": (CALIBRATION_SUMMARY, read_docx),
+    }
+
+    for name, (path, reader) in file_map.items():
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Resource file not found: {path}")
+        text = reader(path)
+        n = check_token_count(text, label=name)
+        resources[name] = text
+        print(f"  ✓ Resource '{name}' loaded ({n} tokens).")
+
+    return resources
 
 
 # ─This part loads pipelines and individual papers
@@ -201,14 +243,13 @@ def list_papers(folder: str) -> list[tuple[str, str]]:
     return sorted(papers, key=lambda x: x[0])
 
 
-# This part parses grades and rounds them (REMEMBER TO REVISE THIS TO FIX THE ROUNDING)
+# This part parses grades and leaves them as free floats
 
 def parse_grade(value) -> Optional[float]:
     """
-    Validate and normalise a grade value to the Dutch grading scale:
+    Validate a grade value for sections:
       - Range  : 1.0 – 10.0
-      - Step   : 0.5
-      - 5.5 is not a valid Dutch grade → rounded down to 5.0
+      - Any float in this range is allowed (no rounding here)
     """
     if value is None:
         return None
@@ -216,11 +257,8 @@ def parse_grade(value) -> Optional[float]:
         g = float(value)
     except (TypeError, ValueError):
         return None
-    g = round(g * 2) / 2.0      # snap to nearest 0.5
     if g < 1.0 or g > 10.0:
         return None
-    if g == 5.5:
-        g = 5.0                  # 5.5 not valid on Dutch scale → round down
     return g
 
 
@@ -270,53 +308,60 @@ def parse_holistic_final_reply(reply: str) -> dict:
     except Exception:
         return {"final_grade": None, "justification": None, "raw_reply": reply}
     return {
-        "final_grade":    parse_grade(data.get("final_grade")),
-        "justification":  data.get("justification"),
-        "raw_reply":      reply,
+        "final_grade":   parse_grade(data.get("final_grade")),
+        "justification": data.get("justification"),
+        "raw_reply":     reply,
     }
 
 
-# This part calculates final grades as defined by the weighted formula in the improved rubrics
+# This part calculates final grades for the improved rubric (Python only)
 
 def compute_improved_final_grade(section_grades: dict[str, Optional[float]]) -> Optional[float]:
     """
     Compute the weighted final grade for the improved rubric.
     Returns None if any required grade is missing.
 
-    Caps:
-      - Any component < 5.5  → final grade cannot exceed 6.0
-      - Two or more < 5.5    → final grade cannot exceed 5.0
-      - 5.5 is not valid     → rounded down to 5.0
+    Rules:
+      - Weighted sum is rounded to the nearest 0.5
+      - Any rounded result below 6.0 (i.e. raw < 5.75) is turned into 5.0 (fail)
     """
-    required = list(IMPROVED_WEIGHTS.keys())
-    for key in required:
+    for key in IMPROVED_WEIGHTS:
         if section_grades.get(key) is None:
             return None
 
     weighted_sum = sum(
-        section_grades[key] * IMPROVED_WEIGHTS[key] for key in required
+        section_grades[key] * IMPROVED_WEIGHTS[key] for key in IMPROVED_WEIGHTS
     )
     final = round(weighted_sum * 2) / 2.0
 
-    below_threshold = [k for k in required if section_grades[k] < 5.5]
-    if len(below_threshold) >= 2:
-        final = min(final, 5.0)
-    elif len(below_threshold) == 1:
-        final = min(final, 6.0)
-
-    if final == 5.5:
+    if final < 6.0:
         final = 5.0
 
     return final
 
 
-# Prompt-building part
+# Prompt-building helpers
+
+def build_resource_block(resources: dict[str, str]) -> str:
+    """Assemble the additional resources into a single prompt block."""
+    return (
+        "## Writing guide\n"
+        f"{resources['writing_guide']}\n\n"
+        "## Sample Results section\n"
+        f"{resources['sample_results']}\n\n"
+        "## Calibration paper\n"
+        f"{resources['calibration_paper']}\n\n"
+        "## Calibration summary (four human graders)\n"
+        f"{resources['calibration_summary']}\n"
+    )
+
 
 def build_section_prompt(
     section_name:       str,
     rubric_text:        str,
     previous_summaries: dict[str, dict],
     rubric_version:     str,
+    resources:          dict[str, str],
 ) -> str:
     """
     Build the system prompt for grading one section.
@@ -406,9 +451,14 @@ def build_section_prompt(
             "Do NOT describe or evaluate the student's work in this field."
         )
 
-    prompt = f"""{LLM_ROLE}
-You will grade one section of the paper at a time. You have access to the full grading rubric below.
+    resource_block = build_resource_block(resources)
 
+    prompt = f"""{LLM_ROLE}
+You will grade one section of the paper at a time. You have access to the full grading rubric,
+a writing guide for this course, a sample Results section, and a calibration paper with a
+summary of grades and reasoning from four human graders.
+
+{resource_block}
 {summary_block}
 ## Rubric
 {rubric_text}
@@ -425,10 +475,14 @@ APA formatting compliance, paragraph structure, and any redundancy or inconsiste
 in writing. These notes will be used later to assign an overall Language & Style grade
 for the full paper.
 
+## Grading scale
+Assign a grade between 1.0 and 10.0. Any value in this range is allowed (e.g. 7.247, 3.158).
+Do NOT round to 0.5 steps — that only applies to the final grade, which is computed separately.
+
 ## Output format
 Respond with a JSON object containing exactly these keys:
 {{
-  "grade": <number between 1.0 and 10.0, multiples of 0.5, not 5.5>,
+  "grade": <number between 1.0 and 10.0>,
   "content_summary": "<3–5 sentence summary of the scientific content and quality of this section>",
   "style_notes": "<2–4 sentence summary of language and style observations for this section>",
   "rubric_feedback": "<2–4 sentences of constructive feedback on the rubric criteria THEMSELVES, not on the student paper>"
@@ -441,6 +495,7 @@ def build_language_style_prompt(
     rubric_text:     str,
     all_style_notes: dict[str, str],
     rubric_version:  str,
+    resources:       dict[str, str],
 ) -> str:
     """
     Build the system prompt for the Language & Style grading step.
@@ -470,9 +525,14 @@ def build_language_style_prompt(
             "Do NOT describe or evaluate the student's work in this field."
         )
 
+    resource_block = build_resource_block(resources)
+
     prompt = f"""{LLM_ROLE}
 You have already graded all four sections of the paper (Introduction, Methods, Results, Discussion).
-Below are your style notes from each section, and the full grading rubric.
+Below are your style notes from each section, the full grading rubric, and the course writing guide
+and related resources.
+
+{resource_block}
 
 ## Style notes from all sections
 {notes_block}
@@ -487,10 +547,14 @@ sections, not just one.
 
 {feedback_instruction}
 
+## Grading scale
+Assign a grade between 1.0 and 10.0. Any value in this range is allowed (e.g. 7.247, 3.158).
+Do NOT round to 0.5 steps — that only applies to the final grade, which is computed separately.
+
 ## Output format
 Respond with a JSON object containing exactly these keys:
 {{
-  "grade": <number between 1.0 and 10.0, multiples of 0.5, not 5.5>,
+  "grade": <number between 1.0 and 10.0>,
   "rubric_feedback": "<2–4 sentences of constructive feedback on the Language & Style rubric criteria THEMSELVES, not on the student paper>"
 }}
 """
@@ -532,10 +596,14 @@ to inform your holistic judgment.
 Assign a single holistic final grade for the paper. Justify your grade in 3–5 sentences,
 explaining how the overall quality of the paper maps onto the rubric's performance bands.
 
+## Grading scale
+The final grade must be between 1.0 and 10.0 in steps of 0.5.
+Any final grade below 6.0 should be given as 5.0 (fail).
+
 ## Output format
 Respond with a JSON object containing exactly these keys:
 {{
-  "final_grade": <number between 1.0 and 10.0, multiples of 0.5, not 5.5>,
+  "final_grade": <number between 1.0 and 10.0, multiples of 0.5, minimum passing grade is 6.0, any fail is 5.0>,
   "justification": "<3–5 sentence justification of the holistic final grade>"
 }}
 """
@@ -585,6 +653,7 @@ def grade_paper_sequential(
     model:          str,
     temperature:    float,
     run_id:         str,
+    resources:      dict[str, str],
 ) -> dict:
     """
     Grade one paper sequentially through all sections, then Language & Style,
@@ -616,6 +685,7 @@ def grade_paper_sequential(
             rubric_text        = rubric_text,
             previous_summaries = previous_summaries,
             rubric_version     = rubric_version,
+            resources          = resources,
         )
         user_content = (
             f"Please grade the following {sec_name.upper()} section:\n\n{sec_text}"
@@ -649,7 +719,7 @@ def grade_paper_sequential(
         for sec in SECTION_ORDER
         if section_results[sec]["style_notes"]
     }
-    ls_prompt = build_language_style_prompt(rubric_text, all_style_notes, rubric_version)
+    ls_prompt = build_language_style_prompt(rubric_text, all_style_notes, rubric_version, resources)
     ls_user   = (
         "Using the style notes above and the rubric, assign an overall "
         "Language & Style grade for the entire paper."
@@ -671,10 +741,11 @@ def grade_paper_sequential(
     final_justification = None
 
     if rubric_version == "improved":
+        # Python-only final grade; LLM output is not used here
         all_grades = {sec: section_results[sec]["grade"] for sec in SECTION_ORDER}
         all_grades["language_style"] = ls_result["grade"]
         final_grade = compute_improved_final_grade(all_grades)
-        print(f"\n  ✓ Improved rubric weighted final grade: {final_grade}")
+        print(f"\n  ✓ Improved rubric weighted final grade (Python): {final_grade}")
 
     else:
         hf_prompt = build_holistic_final_prompt(rubric_text, section_results)
@@ -731,6 +802,7 @@ def grade_paper_sequential(
 if __name__ == "__main__":
 
     RUBRICS   = load_rubrics()
+    RESOURCES = load_resources()
     PIPELINES = load_pipelines(PIPELINES_FILE)
 
     PIPELINES = [p for p in PIPELINES if p.get("grading_mode") == "sequential"]
@@ -787,6 +859,7 @@ if __name__ == "__main__":
                         model          = model,
                         temperature    = temperature,
                         run_id         = run_id,
+                        resources      = RESOURCES,
                     )
                     append_result_row(RESULTS_CSV, row)
                     done += 1

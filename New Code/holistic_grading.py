@@ -1,5 +1,7 @@
 """
-This script grades papers in one go, without intermediate grades.
+Grades papers holistically in a single API call per run.
+Both rubric conditions (original / improved) produce identical output structure.
+Final grade is computed in Python only — never by the LLM.
 """
 
 import os
@@ -16,56 +18,54 @@ from docx import Document
 from openai import OpenAI
 
 
-# Configure paths here, if necessary
+# ── Paths & constants ─────────────────────────────────────────────────────────
 
 API_KEY_FILE         = r"C:\Users\fsoft\Desktop\api_key.txt"
 PAPERS_FOLDER        = r"C:\Users\fsoft\Desktop\Za Internship - code\Papers"
 RUBRIC_ORIGINAL_PATH = r"C:\Users\fsoft\Desktop\Za Internship - code\Rubric_original.docx"
 RUBRIC_IMPROVED_PATH = r"C:\Users\fsoft\Desktop\Za Internship - code\Rubric_improved.docx"
+WRITING_GUIDE        = r"C:\Users\fsoft\Desktop\Za Internship - code\Writing_guide.pdf"
+SAMPLE_RESULTS       = r"C:\Users\fsoft\Desktop\Za Internship - code\Sample_results.pdf"
+CALIBRATION_SUMMARY  = r"C:\Users\fsoft\Desktop\Za Internship - code\Calibration_summary.docx"
 PIPELINES_FILE       = r"C:\Users\fsoft\Desktop\Za Internship - code\pipelines.json"
 RESULTS_CSV          = r"C:\Users\fsoft\Desktop\Za Internship - code\results.csv"
 
-# If needed, change number of runs per pipeline
-
-N_RUNS = 5
-
+N_RUNS        = 5
 SECTION_ORDER = ["introduction", "methods", "results", "discussion"]
 
-IMPROVED_WEIGHTS = {
-    "introduction":   0.285,
-    "methods":        0.190,
-    "results":        0.190,
-    "discussion":     0.285,
-    "language_style": 0.050,
+WEIGHTS = {
+    "introduction":   0.30,
+    "methods":        0.15,
+    "results":        0.15,
+    "discussion":     0.30,
+    "language_style": 0.10,
 }
 
-# Role description used in every prompt
 LLM_ROLE = (
-    "You are a tutor for a course designed to teach second-year psychology students "
-    "how to write scientific papers, with a particular focus on scientific reasoning "
-    "and argumentation."
+    "You are a tutor grading first scientific papers written by second-year psychology "
+    "students. The course focuses on scientific reasoning and argumentation. Students have "
+    "only previously written a short literature review. Grade against the provided rubric, "
+    "writing guide, and sample paper — not against publishable-paper standards. When "
+    "deciding whether to fail a student, ask yourself whether they would be able to pass "
+    "a bachelor's thesis the following year with the same skills."
 )
 
 
-# API key part
+# ── API client ────────────────────────────────────────────────────────────────
 
 def _load_api_key() -> str:
     if not os.path.exists(API_KEY_FILE):
-        raise FileNotFoundError(
-            f"API key file not found: {API_KEY_FILE}\n"
-            "API Key file missing."
-        )
+        raise FileNotFoundError(f"API key file not found: {API_KEY_FILE}")
     with open(API_KEY_FILE, "r", encoding="utf-8") as f:
         key = f.readline().strip()
     if not key:
         raise ValueError(f"API key file is empty: {API_KEY_FILE}")
     return key
 
-
 client = OpenAI(api_key=_load_api_key())
 
 
-# This part defines how papers will be parsed for both docx and pdf file types
+# ── File readers ──────────────────────────────────────────────────────────────
 
 def _read_pdf(path: str) -> str:
     parts = []
@@ -76,9 +76,7 @@ def _read_pdf(path: str) -> str:
                 parts.append(text)
             for table in page.extract_tables() or []:
                 for row in table:
-                    row_text = " | ".join(
-                        cell.strip() for cell in row if cell and cell.strip()
-                    )
+                    row_text = " | ".join(cell.strip() for cell in row if cell and cell.strip())
                     if row_text:
                         parts.append(row_text)
     return "\n\n".join(parts)
@@ -86,118 +84,110 @@ def _read_pdf(path: str) -> str:
 
 def _read_docx(path: str) -> str:
     doc = Document(path)
-    parts = []
-    for p in doc.paragraphs:
-        if p.text.strip():
-            parts.append(p.text)
+    parts = [p.text for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
         for row in table.rows:
-            row_text = " | ".join(
-                cell.text.strip() for cell in row.cells if cell.text.strip()
-            )
+            row_text = " | ".join(c.text.strip() for c in row.cells if c.text.strip())
             if row_text:
                 parts.append(row_text)
     return "\n".join(parts)
 
 
 def _split_into_sections(text: str) -> dict[str, str]:
-    """
-    Splits document text into four sections as defined by subheading titles, accounting for slight name variation
-    """
-    section_patterns = {
+    """Split full document text into named sections based on headings."""
+    patterns = {
         "introduction": r"(?i)^\s*(\d+[\.\)]\s*)?introduction[:\.]?\s*$",
         "methods":      r"(?i)^\s*(\d+[\.\)]\s*)?methods?[:\.]?\s*$",
         "results":      r"(?i)^\s*(\d+[\.\)]\s*)?results?[:\.]?\s*$",
         "discussion":   r"(?i)^\s*(\d+[\.\)]\s*)?discussion[:\.]?\s*$",
     }
-
-    section_texts: dict[str, str] = {}
-    lines = text.split("\n")
-    current_section: Optional[str] = None
-    current_lines: list[str] = []
-
-    for line in lines:
+    sections: dict[str, str] = {}
+    current, buf = None, []
+    for line in text.split("\n"):
         stripped = line.strip()
         if len(stripped) <= 40:
-            matched = False
-            for sec_name, pattern in section_patterns.items():
-                if re.match(pattern, stripped):
-                    if current_section is not None:
-                        section_texts[current_section] = "\n".join(current_lines).strip()
-                    current_section = sec_name
-                    current_lines = []
-                    matched = True
+            for name, pat in patterns.items():
+                if re.match(pat, stripped):
+                    if current:
+                        sections[current] = "\n".join(buf).strip()
+                    current, buf = name, []
                     break
-            if matched:
-                continue
-        if current_section is not None:
-            current_lines.append(line)
-
-    if current_section is not None:
-        section_texts[current_section] = "\n".join(current_lines).strip()
-
-    return section_texts
+            else:
+                if current:
+                    buf.append(line)
+        elif current:
+            buf.append(line)
+    if current:
+        sections[current] = "\n".join(buf).strip()
+    return sections
 
 
 def load_document(path: str) -> dict[str, str]:
-    """Load a .pdf or .docx paper and return {section_name: section_text}."""
-    _, ext = os.path.splitext(path)
-    ext = ext.lower()
+    """Load a .pdf or .docx and return {section_name: section_text}."""
+    ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
-        full_text = _read_pdf(path)
+        return _split_into_sections(_read_pdf(path))
     elif ext == ".docx":
-        full_text = _read_docx(path)
-    else:
-        raise ValueError(f"Unsupported format '{ext}'. Use .pdf or .docx.")
-    return _split_into_sections(full_text)
+        return _split_into_sections(_read_docx(path))
+    raise ValueError(f"Unsupported format '{ext}'. Use .pdf or .docx.")
 
 
 def build_full_paper_text(sections: dict[str, str]) -> str:
-    """
-    If the pipeline is holistic, this functions combines all detected sections into one string for the LLM to process.
-    """
-    parts = []
-    for sec in SECTION_ORDER:
-        if sec in sections and sections[sec].strip():
-            parts.append(f"## {sec.upper()}\n\n{sections[sec]}")
+    """Combine detected sections into a single string for the LLM."""
+    parts = [f"## {s.upper()}\n\n{sections[s]}" for s in SECTION_ORDER if sections.get(s)]
     return "\n\n---\n\n".join(parts)
 
 
-# This part checks token length and provides a warning if it's getting close to the limit
+# ── Token counting ────────────────────────────────────────────────────────────
 
-_ENCODING   = tiktoken.get_encoding("o200k_base")
+_ENC        = tiktoken.get_encoding("o200k_base")
 _MAX_TOKENS = 100_000
 
 
 def check_token_count(text: str, label: str = "") -> int:
-    n = len(_ENCODING.encode(text))
+    n = len(_ENC.encode(text))
     tag = f"[{label}] " if label else ""
     if n > _MAX_TOKENS:
-        raise ValueError(f"{tag}Text is {n} tokens, exceeding the {_MAX_TOKENS}-token limit.")
+        raise ValueError(f"{tag}{n} tokens exceeds the {_MAX_TOKENS}-token limit.")
     if n > _MAX_TOKENS * 0.85:
-        print(f"  ⚠  Warning: {tag}{n} tokens (>85 % of limit).")
+        print(f"  ⚠  Warning: {tag}{n} tokens (>85% of limit).")
     return n
 
 
-# This part loads both original and improved rubric files, and keeps them in cached memory
+# ── Resource & rubric loading ─────────────────────────────────────────────────
 
 def load_rubrics() -> dict[str, str]:
-    """Read both rubric files once and keep them in memory."""
-    print("\nLoading rubrics into memory cache...")
-    rubrics: dict[str, str] = {}
-    for name, path in [("original", RUBRIC_ORIGINAL_PATH),
-                        ("improved", RUBRIC_IMPROVED_PATH)]:
+    """Load both rubric files into memory."""
+    print("\nLoading rubrics...")
+    rubrics = {}
+    for name, path in [("original", RUBRIC_ORIGINAL_PATH), ("improved", RUBRIC_IMPROVED_PATH)]:
         if not os.path.exists(path):
-            raise FileNotFoundError(f"Rubric file not found: {path}")
+            raise FileNotFoundError(f"Rubric not found: {path}")
         rubrics[name] = _read_docx(path)
-        n = check_token_count(rubrics[name], label=f"rubric_{name}")
-        print(f"  ✓ Rubric '{name}' loaded ({n} tokens).")
+        print(f"  ✓ '{name}' ({check_token_count(rubrics[name], label=name)} tokens)")
     return rubrics
 
 
-# This part loads individual papers and pipelines
+def load_resources() -> dict[str, str]:
+    """Load writing guide, sample results, and calibration summary into memory."""
+    print("Loading resources...")
+    resources = {}
+    for label, path, reader in [
+        ("writing_guide",       WRITING_GUIDE,       _read_pdf),
+        ("sample_results",      SAMPLE_RESULTS,       _read_pdf),
+        ("calibration_summary", CALIBRATION_SUMMARY, _read_docx),
+    ]:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Resource not found: {path}")
+        resources[label] = reader(path)
+        print(f"  ✓ '{label}' ({check_token_count(resources[label], label=label)} tokens)")
+    return resources
+
+
+# ── Pipeline & paper discovery ────────────────────────────────────────────────
 
 def load_pipelines(path: str) -> list[dict]:
+    """Load holistic pipelines from JSON."""
     with open(path, "r", encoding="utf-8") as f:
         all_pipelines = json.load(f)
     holistic = [p for p in all_pipelines if p.get("grading_mode") == "holistic"]
@@ -207,103 +197,59 @@ def load_pipelines(path: str) -> list[dict]:
 
 def list_papers(folder: str) -> list[tuple[str, str]]:
     """Return sorted (student_id, path) pairs for all papers in folder."""
-    paths = (
-        glob.glob(os.path.join(folder, "*.pdf")) +
-        glob.glob(os.path.join(folder, "*.docx"))
-    )
-    papers = []
-    for p in paths:
-        filename = os.path.basename(p)
-        if filename.startswith("~$"):
-            continue
-        student_id = os.path.splitext(filename)[0]
-        papers.append((student_id, p))
-    return sorted(papers, key=lambda x: x[0])
+    paths = glob.glob(os.path.join(folder, "*.pdf")) + glob.glob(os.path.join(folder, "*.docx"))
+    papers = [(os.path.splitext(os.path.basename(p))[0], p)
+              for p in paths if not os.path.basename(p).startswith("~$")]
+    return sorted(papers)
 
 
-# This part defines grade parsing and validation (REMEMBER TO EDIT THIS TO REVISE THE GRADE SO THAT EVERYTHING UNDER A 6.0 IS TURNED INTO A FAIL)
+# ── Grade parsing & final grade computation ───────────────────────────────────
 
 def _parse_grade(value) -> Optional[float]:
-    """
-    Validate and normalise to the Dutch grading scale:
-      - Range 1.0 – 10.0, steps of 0.5
-      - 5.5 is not valid → rounded down to 5.0
-    """
+    """Accept any float in 1.0-10.0; snap to nearest 0.5. Returns None if invalid."""
     if value is None:
         return None
     try:
         g = float(value)
     except (TypeError, ValueError):
         return None
-    g = round(g * 2) / 2.0
     if g < 1.0 or g > 10.0:
         return None
-    if g == 5.5:
-        g = 5.0                  
-    return g
+    return round(g * 2) / 2.0
 
 
-def parse_holistic_reply_original(raw: str) -> dict:
-    """
-    Parse the single-call reply for the ORIGINAL rubric.
+def compute_final_grade(grades: dict[str, Optional[float]]) -> Optional[float]:
+    """Weighted sum of subsection grades. Returns None if any grade is missing."""
+    if any(grades.get(k) is None for k in WEIGHTS):
+        return None
+    return sum(grades[k] * w for k, w in WEIGHTS.items())
 
-    Expected JSON keys:
-      final_grade, justification,
-      intro_rubric_feedback, methods_rubric_feedback,
-      results_rubric_feedback, discussion_rubric_feedback,
-      lang_style_rubric_feedback
-    """
+
+def parse_reply(raw: str) -> dict:
+    """Parse the LLM JSON reply into a flat dict of grades, feedback, and rubric feedback."""
+    empty = {k: None for k in [
+        "intro_grade", "methods_grade", "results_grade", "discussion_grade", "lang_style_grade",
+        "intro_feedback", "methods_feedback", "results_feedback",
+        "discussion_feedback", "lang_style_feedback",
+        "intro_rubric_feedback", "methods_rubric_feedback", "results_rubric_feedback",
+        "discussion_rubric_feedback", "lang_style_rubric_feedback",
+    ]}
+    empty["raw_reply"] = raw
     try:
         data = json.loads(raw)
     except Exception:
-        return {
-            "final_grade": None, "justification": None,
-            "intro_rubric_feedback": None, "methods_rubric_feedback": None,
-            "results_rubric_feedback": None, "discussion_rubric_feedback": None,
-            "lang_style_rubric_feedback": None,
-            "raw_reply": raw,
-        }
-    return {
-        "final_grade":                _parse_grade(data.get("final_grade")),
-        "justification":              data.get("justification"),
-        "intro_rubric_feedback":      data.get("intro_rubric_feedback"),
-        "methods_rubric_feedback":    data.get("methods_rubric_feedback"),
-        "results_rubric_feedback":    data.get("results_rubric_feedback"),
-        "discussion_rubric_feedback": data.get("discussion_rubric_feedback"),
-        "lang_style_rubric_feedback": data.get("lang_style_rubric_feedback"),
-        "raw_reply":                  raw,
-    }
-
-
-def parse_holistic_reply_improved(raw: str) -> dict:
-    """
-    Parse the single-call reply for the IMPROVED rubric.
-
-    Expected JSON keys:
-      intro_grade, methods_grade, results_grade, discussion_grade,
-      lang_style_grade,
-      intro_rubric_feedback, methods_rubric_feedback,
-      results_rubric_feedback, discussion_rubric_feedback,
-      lang_style_rubric_feedback
-    """
-    try:
-        data = json.loads(raw)
-    except Exception:
-        return {
-            "intro_grade": None, "methods_grade": None,
-            "results_grade": None, "discussion_grade": None,
-            "lang_style_grade": None,
-            "intro_rubric_feedback": None, "methods_rubric_feedback": None,
-            "results_rubric_feedback": None, "discussion_rubric_feedback": None,
-            "lang_style_rubric_feedback": None,
-            "raw_reply": raw,
-        }
+        return empty
     return {
         "intro_grade":                _parse_grade(data.get("intro_grade")),
         "methods_grade":              _parse_grade(data.get("methods_grade")),
         "results_grade":              _parse_grade(data.get("results_grade")),
         "discussion_grade":           _parse_grade(data.get("discussion_grade")),
         "lang_style_grade":           _parse_grade(data.get("lang_style_grade")),
+        "intro_feedback":             data.get("intro_feedback"),
+        "methods_feedback":           data.get("methods_feedback"),
+        "results_feedback":           data.get("results_feedback"),
+        "discussion_feedback":        data.get("discussion_feedback"),
+        "lang_style_feedback":        data.get("lang_style_feedback"),
         "intro_rubric_feedback":      data.get("intro_rubric_feedback"),
         "methods_rubric_feedback":    data.get("methods_rubric_feedback"),
         "results_rubric_feedback":    data.get("results_rubric_feedback"),
@@ -313,144 +259,57 @@ def parse_holistic_reply_improved(raw: str) -> dict:
     }
 
 
-# For the improved rubrics, this part defines the weighted formula for calculating final grade
+# ── Prompt building ───────────────────────────────────────────────────────────
 
-def compute_improved_final_grade(grades: dict[str, Optional[float]]) -> Optional[float]:
-    """
-    Weighted final grade for the improved rubric.
-    Returns None if any required component grade is missing.
-
-    There are some hard limits to the grade as defined in the improved rubrics:
-      - Any component < 5.5  → final capped at 6.0
-      - Two or more < 5.5    → final capped at 5.0
-      - 5.5 is not valid     → rounded down to 5.0
-    """
-    for key in IMPROVED_WEIGHTS:
-        if grades.get(key) is None:
-            return None
-
-    weighted = sum(grades[k] * w for k, w in IMPROVED_WEIGHTS.items())
-    final = round(weighted * 2) / 2.0
-
-    below = [k for k in IMPROVED_WEIGHTS if grades[k] < 5.5]
-    if len(below) >= 2:
-        final = min(final, 5.0)
-    elif len(below) == 1:
-        final = min(final, 6.0)
-
-    if final == 5.5:
-        final = 5.0
-
-    return final
-
-
-# Prompt-building part
-
-def _build_holistic_prompt_original(rubric_text: str) -> str:
-    """
-    System prompt for the original rubric holistic grading call.
-
-    The model reads the entire paper and assigns:
-      - A single holistic final grade + justification
-      - Rubric feedback per section + Language & Style
-        (about the rubric as a tool, not about the student's paper)
-    """
+def build_system_prompt(rubric_text: str, resources: dict[str, str]) -> str:
+    """Build the system prompt. Identical for both rubric versions."""
     return f"""{LLM_ROLE}
-You will read the entire paper and assign a single holistic final grade.
 
-## Grading instructions
-The rubric explicitly states that the final grade is NOT a weighted average of section scores.
-It should reflect the paper as a whole, with most weight placed on scientific reasoning and
-argumentation — primarily in the Introduction and Discussion.
-Use the rubric's performance band descriptions to anchor your judgment.
+## Resources
+The rubric is your primary grading tool — all grades must be grounded in its criteria. \
+The other resources provide supporting context and do not override the rubric.
 
-## Rubric feedback instructions
-After assigning the final grade, provide brief feedback on the rubric CRITERIA THEMSELVES
-for EACH section and for Language & Style. Imagine you are a rubric designer reviewing your
-own tool. Note any criteria that are unclear, overly subjective, or that would benefit from
-more concrete anchors or clearer band descriptors.
-Do NOT describe or evaluate the student's work in this field.
+### Writing guide
+{resources['writing_guide']}
 
-## Full grading rubric
+### Sample Results section
+{resources['sample_results']}
+
+### Calibration summary
+{resources['calibration_summary']}
+
+## Grading rubric
 {rubric_text}
 
+## Rubric feedback
+As you grade, provide feedback on each section of the rubric itself — not on the student's \
+paper. Imagine you are developing and refining a grading rubric and are collecting notes to \
+improve it. Do not describe or evaluate the student's work in these fields.
+
 ## Output format
-Respond with a JSON object containing EXACTLY these keys — no more, no less:
+Respond with a JSON object containing EXACTLY these keys:
 {{
-  "final_grade": <number between 1.0 and 10.0, multiples of 0.5, not 5.5>,
-  "justification": "<3–5 sentences explaining how the overall paper quality maps onto the rubric bands>",
-  "intro_rubric_feedback": "<2–3 sentences of feedback on the Introduction rubric criteria THEMSELVES, not on the student paper>",
-  "methods_rubric_feedback": "<2–3 sentences of feedback on the Methods rubric criteria THEMSELVES, not on the student paper>",
-  "results_rubric_feedback": "<2–3 sentences of feedback on the Results rubric criteria THEMSELVES, not on the student paper>",
-  "discussion_rubric_feedback": "<2–3 sentences of feedback on the Discussion rubric criteria THEMSELVES, not on the student paper>",
-  "lang_style_rubric_feedback": "<2–3 sentences of feedback on the Language & Style rubric criteria THEMSELVES, not on the student paper>"
+  "intro_grade": <number 1.0-10.0 in 0.5 steps>,
+  "methods_grade": <number 1.0-10.0 in 0.5 steps>,
+  "results_grade": <number 1.0-10.0 in 0.5 steps>,
+  "discussion_grade": <number 1.0-10.0 in 0.5 steps>,
+  "lang_style_grade": <number 1.0-10.0 in 0.5 steps>,
+  "intro_feedback": "<reasoning behind the Introduction grade>",
+  "methods_feedback": "<reasoning behind the Methods grade>",
+  "results_feedback": "<reasoning behind the Results grade>",
+  "discussion_feedback": "<reasoning behind the Discussion grade>",
+  "lang_style_feedback": "<reasoning behind the Language & Style grade>",
+  "intro_rubric_feedback": "<feedback on the Introduction rubric criteria, not the paper>",
+  "methods_rubric_feedback": "<feedback on the Methods rubric criteria, not the paper>",
+  "results_rubric_feedback": "<feedback on the Results rubric criteria, not the paper>",
+  "discussion_rubric_feedback": "<feedback on the Discussion rubric criteria, not the paper>",
+  "lang_style_rubric_feedback": "<feedback on the Language & Style rubric criteria, not the paper>"
 }}""".strip()
 
 
-def _build_holistic_prompt_improved(rubric_text: str) -> str:
-    """
-    System prompt for the improved rubric holistic grading call.
+# ── API call ──────────────────────────────────────────────────────────────────
 
-    The model reads the entire paper and assigns:
-      - A grade per section (Introduction, Methods, Results, Discussion)
-      - A Language & Style grade
-      - Rubric feedback per section + Language & Style
-        (about the rubric as a tool, not about the student's paper)
-    The final grade is computed in Python from these component grades.
-    """
-    return f"""{LLM_ROLE}
-You will read the entire paper and assign a grade to each component separately.
-
-## Grading instructions
-Use the rubric below to grade each component. Five performance bands are provided for each
-component, each with a corresponding grade range:
-  - Insufficient : < 5.5
-  - Developing   : 5.5 – 6.4
-  - Adequate     : 6.5 – 7.4
-  - Good         : 7.5 – 8.4
-  - Excellent    : > 8.5
-
-Assign a single numeric grade within the appropriate band for each component.
-Grades must be between 1.0 and 10.0 in steps of 0.5. The grade 5.5 is NOT allowed —
-use 5.0 (insufficient) or 6.0 (lowest passing) instead.
-
-The final grade will be computed automatically from your component grades using the
-weighted formula specified in the rubric. You do NOT need to compute it yourself.
-
-## Rubric feedback instructions
-After grading, provide brief constructive feedback on the rubric CRITERIA THEMSELVES
-for each component. Imagine you are a rubric designer reviewing your own tool. Note any
-criteria that are ambiguous, band descriptors that are hard to distinguish from each other,
-or aspects that would benefit from more concrete examples or clearer thresholds.
-Do NOT describe or evaluate the student's work in this field.
-
-## Full grading rubric
-{rubric_text}
-
-## Output format
-Respond with a JSON object containing EXACTLY these keys — no more, no less:
-{{
-  "intro_grade": <number>,
-  "methods_grade": <number>,
-  "results_grade": <number>,
-  "discussion_grade": <number>,
-  "lang_style_grade": <number>,
-  "intro_rubric_feedback": "<2–3 sentences of feedback on the Introduction rubric criteria THEMSELVES, not on the student paper>",
-  "methods_rubric_feedback": "<2–3 sentences of feedback on the Methods rubric criteria THEMSELVES, not on the student paper>",
-  "results_rubric_feedback": "<2–3 sentences of feedback on the Results rubric criteria THEMSELVES, not on the student paper>",
-  "discussion_rubric_feedback": "<2–3 sentences of feedback on the Discussion rubric criteria THEMSELVES, not on the student paper>",
-  "lang_style_rubric_feedback": "<2–3 sentences of feedback on the Language & Style rubric criteria THEMSELVES, not on the student paper>"
-}}""".strip()
-
-
-# API call wrapper part
-
-def _call_openai(
-    system_prompt: str,
-    user_content:  str,
-    model:         str,
-    temperature:   float,
-) -> str:
+def _call_openai(system_prompt: str, user_content: str, model: str, temperature: float) -> str:
     response = client.chat.completions.create(
         model=model,
         temperature=temperature,
@@ -463,7 +322,7 @@ def _call_openai(
     return response.choices[0].message.content
 
 
-# CSV-writing part
+# ── CSV writing ───────────────────────────────────────────────────────────────
 
 def append_result_row(csv_path: str, row: dict) -> None:
     """Append one row to the CSV, writing the header first if the file is new."""
@@ -476,110 +335,48 @@ def append_result_row(csv_path: str, row: dict) -> None:
         writer.writerow(row)
 
 
-# The grading function itself
+# ── Main grading function ─────────────────────────────────────────────────────
 
 def grade_paper_holistic(
-    student_id:     str,
-    sections:       dict[str, str],
-    rubric_text:    str,
-    rubric_version: str,
-    model:          str,
-    temperature:    float,
-    run_id:         str,
+    student_id: str, sections: dict[str, str], rubric_text: str,
+    rubric_version: str, model: str, temperature: float,
+    run_id: str, resources: dict[str, str],
 ) -> dict:
-    """
-    Grade one paper in a single API call (holistic pipeline).
-    Returns a flat dict ready to be written as one CSV row.
-
-    Column names match sequential_grading.py where applicable so that
-    both scripts feed cleanly into the same JASP dataset.
-    """
+    """Grade one paper in a single API call. Returns a CSV-ready row dict."""
     print(f"\n{'─' * 64}")
-    print(f"  run_id   : {run_id}")
-    print(f"  model    : {model}  |  rubric: {rubric_version}  |  temp: {temperature}")
+    print(f"  run_id : {run_id}")
+    print(f"  model  : {model}  |  rubric: {rubric_version}  |  temp: {temperature}")
     print(f"{'─' * 64}")
 
     full_paper_text = build_full_paper_text(sections)
-    token_count     = check_token_count(full_paper_text, label=f"{student_id}.full_paper")
-    print(f"  Full paper: {token_count} tokens.")
+    check_token_count(full_paper_text, label=f"{student_id}.paper")
 
-    # Build prompt
-    if rubric_version == "original":
-        system_prompt = _build_holistic_prompt_original(rubric_text)
-    else:
-        system_prompt = _build_holistic_prompt_improved(rubric_text)
+    system_prompt = build_system_prompt(rubric_text, resources)
+    user_content  = "Please grade the following student paper.\n\n" + full_paper_text
 
-    user_content = (
-        "Please grade the following student paper according to your instructions.\n\n"
-        + full_paper_text
-    )
+    print(f"  System prompt : {len(system_prompt)} chars")
+    print(f"  Paper preview : {full_paper_text[:120].replace(chr(10), ' ')} ...")
 
-    # Prompt preview
-    print(f"\n  ┌─ PROMPT SENT (rubric: {rubric_version}) {'─' * 30}")
-    print(f"  │  [system — first 600 chars]")
-    for line in system_prompt[:600].splitlines():
-        print(f"  │  {line}")
-    if len(system_prompt) > 600:
-        print(f"  │  ... [truncated — full prompt is {len(system_prompt)} chars]")
-    print(f"  │  [user — paper starts with]")
-    print(f"  │  {full_paper_text[:200].replace(chr(10), ' ')}")
-    print(f"  └{'─' * 60}")
-
-    # API call
     raw_reply = _call_openai(system_prompt, user_content, model, temperature)
+    parsed    = parse_reply(raw_reply)
 
-    # Parse reply
-    if rubric_version == "original":
-        parsed = parse_holistic_reply_original(raw_reply)
+    grades = {
+        "introduction":   parsed["intro_grade"],
+        "methods":        parsed["methods_grade"],
+        "results":        parsed["results_grade"],
+        "discussion":     parsed["discussion_grade"],
+        "language_style": parsed["lang_style_grade"],
+    }
+    final_grade = compute_final_grade(grades)
 
-        final_grade         = parsed["final_grade"]
-        final_justification = parsed["justification"]
+    print(f"  intro={grades['introduction']}  methods={grades['methods']}  "
+          f"results={grades['results']}  discussion={grades['discussion']}  "
+          f"lang={grades['language_style']}  ->  final={final_grade}")
 
-        intro_grade      = None
-        methods_grade    = None
-        results_grade    = None
-        discussion_grade = None
-        lang_style_grade = None
+    if final_grade is None:
+        print(f"  ⚠  Missing grade(s). Raw reply: {raw_reply[:200]}")
 
-        print(f"  ✓ Holistic grading done (original rubric).")
-        print(f"    final_grade   : {final_grade}")
-        print(f"    justification : {str(final_justification or '')[:120]}")
-        if final_grade is None:
-            print(f"  ⚠  Could not parse a valid final grade. Raw reply:")
-            print(f"     {raw_reply[:300]}")
-
-    else:  # improved rubric
-        parsed = parse_holistic_reply_improved(raw_reply)
-
-        intro_grade      = parsed["intro_grade"]
-        methods_grade    = parsed["methods_grade"]
-        results_grade    = parsed["results_grade"]
-        discussion_grade = parsed["discussion_grade"]
-        lang_style_grade = parsed["lang_style_grade"]
-
-        component_grades = {
-            "introduction":   intro_grade,
-            "methods":        methods_grade,
-            "results":        results_grade,
-            "discussion":     discussion_grade,
-            "language_style": lang_style_grade,
-        }
-        final_grade         = compute_improved_final_grade(component_grades)
-        final_justification = None
-
-        print(f"  ✓ Holistic grading done (improved rubric).")
-        print(f"    intro_grade      : {intro_grade}")
-        print(f"    methods_grade    : {methods_grade}")
-        print(f"    results_grade    : {results_grade}")
-        print(f"    discussion_grade : {discussion_grade}")
-        print(f"    lang_style_grade : {lang_style_grade}")
-        print(f"    final_grade      : {final_grade}  (weighted)")
-        if final_grade is None:
-            print("  ⚠  Could not compute final grade — one or more component grades are missing.")
-            print(f"     Raw reply: {raw_reply[:300]}")
-
-    # Make CSV rows
-    row: dict = {
+    return {
         "run_id":                     run_id,
         "student_id":                 student_id,
         "grading_mode":               "holistic",
@@ -587,59 +384,50 @@ def grade_paper_holistic(
         "model":                      model,
         "temperature":                temperature,
         "timestamp":                  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "intro_grade":                intro_grade,
-        "intro_content_summary":      None,
-        "intro_style_notes":          None,
-        "intro_rubric_feedback":      parsed.get("intro_rubric_feedback"),
-        "methods_grade":              methods_grade,
-        "methods_content_summary":    None,
-        "methods_style_notes":        None,
-        "methods_rubric_feedback":    parsed.get("methods_rubric_feedback"),
-        "results_grade":              results_grade,
-        "results_content_summary":    None,
-        "results_style_notes":        None,
-        "results_rubric_feedback":    parsed.get("results_rubric_feedback"),
-        "discussion_grade":           discussion_grade,
-        "discussion_content_summary": None,
-        "discussion_style_notes":     None,
-        "discussion_rubric_feedback": parsed.get("discussion_rubric_feedback"),
-        "lang_style_grade":           lang_style_grade,
-        "lang_style_rubric_feedback": parsed.get("lang_style_rubric_feedback"),
+        "intro_grade":                parsed["intro_grade"],
+        "intro_feedback":             parsed["intro_feedback"],
+        "intro_rubric_feedback":      parsed["intro_rubric_feedback"],
+        "methods_grade":              parsed["methods_grade"],
+        "methods_feedback":           parsed["methods_feedback"],
+        "methods_rubric_feedback":    parsed["methods_rubric_feedback"],
+        "results_grade":              parsed["results_grade"],
+        "results_feedback":           parsed["results_feedback"],
+        "results_rubric_feedback":    parsed["results_rubric_feedback"],
+        "discussion_grade":           parsed["discussion_grade"],
+        "discussion_feedback":        parsed["discussion_feedback"],
+        "discussion_rubric_feedback": parsed["discussion_rubric_feedback"],
+        "lang_style_grade":           parsed["lang_style_grade"],
+        "lang_style_feedback":        parsed["lang_style_feedback"],
+        "lang_style_rubric_feedback": parsed["lang_style_rubric_feedback"],
         "final_grade":                final_grade,
-        "final_grade_justification":  final_justification,
     }
 
-    return row
 
-
-# Checks whether papers have already been graded and skips them if so; prints finalization message
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
 
     RUBRICS   = load_rubrics()
+    RESOURCES = load_resources()
     PIPELINES = load_pipelines(PIPELINES_FILE)
 
-    # Resume support
+    # Resume support — skip already completed run_ids
     completed: set[str] = set()
     if os.path.exists(RESULTS_CSV):
         with open(RESULTS_CSV, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            completed = {row["run_id"] for row in reader if "run_id" in row}
+            completed = {row["run_id"] for row in csv.DictReader(f) if "run_id" in row}
     print(f"Skipping {len(completed)} already completed run(s).")
 
-    papers = list_papers(PAPERS_FOLDER)
+    papers     = list_papers(PAPERS_FOLDER)
+    total_runs = len(papers) * len(PIPELINES) * N_RUNS
+    done       = 0
     print(f"Found {len(papers)} paper(s): {[sid for sid, _ in papers]}\n")
 
-    total_runs = len(papers) * len(PIPELINES) * N_RUNS
-    done = 0
-
     for student_id, doc_path in papers:
-
         try:
-            sections  = load_document(doc_path)
-            full_text = build_full_paper_text(sections)
-            print(f"\nPaper '{student_id}': sections found → {list(sections.keys())}")
-            check_token_count(full_text, label=f"{student_id}.full_paper")
+            sections = load_document(doc_path)
+            print(f"\nPaper '{student_id}': sections -> {list(sections.keys())}")
+            check_token_count(build_full_paper_text(sections), label=student_id)
         except Exception as e:
             print(f"  ✗ Cannot load '{student_id}': {e} — skipping.")
             continue
@@ -653,28 +441,23 @@ if __name__ == "__main__":
                 run_id = f"{student_id}.{pipeline['pipeline_id']}.run{run_idx}"
 
                 if run_id in completed:
-                    print(f"  → Skipping {run_id} (already done).")
+                    print(f"  -> Skipping {run_id} (already done).")
                     done += 1
                     continue
 
                 try:
                     row = grade_paper_holistic(
-                        student_id     = student_id,
-                        sections       = sections,
-                        rubric_text    = RUBRICS[rubric_version],
-                        rubric_version = rubric_version,
-                        model          = model,
-                        temperature    = temperature,
-                        run_id         = run_id,
+                        student_id=student_id, sections=sections,
+                        rubric_text=RUBRICS[rubric_version], rubric_version=rubric_version,
+                        model=model, temperature=temperature,
+                        run_id=run_id, resources=RESOURCES,
                     )
                     append_result_row(RESULTS_CSV, row)
                     done += 1
-                    print(f"\n  ✓ Saved {run_id}  [{done}/{total_runs}]")
-
+                    print(f"  ✓ Saved {run_id}  [{done}/{total_runs}]")
                 except Exception as e:
-                    print(f"\n  ✗ Error on {run_id}: {e}")
+                    print(f"  ✗ Error on {run_id}: {e}")
 
-    print(f"\n{'═' * 64}")
-    print(f"  Holistic grading complete.")
-    print(f"  Results saved to: {RESULTS_CSV}")
-    print(f"{'═' * 64}")
+    print(f"\n{'=' * 64}")
+    print(f"  Holistic grading complete. Results saved to: {RESULTS_CSV}")
+    print(f"{'=' * 64}")
