@@ -1,30 +1,30 @@
 [
   {
-    "model": "gpt-5.4-nano",
+    "model": "gpt-5.4",
     "temperature": 1.0,
     "rubric_version": "original",
     "grading_mode": "sequential",
-    "pipeline_id": "gpt-5.4-nano_t1.0_original_sequential"
+    "pipeline_id": "gpt-5.4_t1.0_original_sequential"
   },
   {
-    "model": "gpt-5.4-nano",
+    "model": "gpt-5.4",
     "temperature": 1.0,
     "rubric_version": "original",
     "grading_mode": "holistic",
-    "pipeline_id": "gpt-5.4-nano_t1.0_original_holistic"
+    "pipeline_id": "gpt-5.4_t1.0_original_holistic"
   },
   {
-    "model": "gpt-5.4-nano",
+    "model": "gpt-5.4",
     "temperature": 1.0,
     "rubric_version": "improved",
     "grading_mode": "sequential",
-    "pipeline_id": "gpt-5.4-nano_t1.0_improved_sequential"
+    "pipeline_id": "gpt-5.4_t1.0_improved_sequential"
   },
   {
-    "model": "gpt-5.4-nano",
+    "model": "gpt-5.4",
     "temperature": 1.0,
     "rubric_version": "improved",
     "grading_mode": "holistic",
-    "pipeline_id": "gpt-5.4-nano_t1.0_improved_holistic"
+    "pipeline_id": "gpt-5.4_t1.0_improved_holistic"
   }
 ]

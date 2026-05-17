@@ -28,9 +28,9 @@ WRITING_GUIDE        = r"C:\Users\fsoft\Desktop\Za Internship - code\Writing_gui
 SAMPLE_RESULTS       = r"C:\Users\fsoft\Desktop\Za Internship - code\Sample_results.pdf"
 CALIBRATION_SUMMARY  = r"C:\Users\fsoft\Desktop\Za Internship - code\Calibration_summary.docx"
 PIPELINES_FILE       = r"C:\Users\fsoft\Desktop\Za Internship - code\pipelines.json"
-RESULTS_CSV          = r"C:\Users\fsoft\Desktop\Za Internship - code\results.csv"
+RESULTS_CSV          = r"C:\Users\fsoft\Desktop\Za Internship - code\results_chatgpt_5-4.csv"
 
-N_RUNS        = 5
+N_RUNS        = 3
 SECTION_ORDER = ["introduction", "methods", "results", "discussion"]
 
 WEIGHTS = {
