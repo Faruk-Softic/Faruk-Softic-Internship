@@ -1,0 +1,14 @@
+Papers/
+Older versions/
+.env
+Sample_results.pdf
+Writing_guide.pdf
+Calibration_paper.docx
+Calibration_summary.docx
+combined.jasp
+__pycache__/
+.Rhistory
+batch_input.jsonl
+batch_input_50.jsonl
+Meeting preparation document.docx
+prompts_example.json

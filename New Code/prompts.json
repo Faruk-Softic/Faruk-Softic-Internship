@@ -1,0 +1,329 @@
+{
+  "llm_role": "You are a tutor grading first scientific papers written by second-year psychology students. The course focuses on scientific reasoning and argumentation. Keep in mind that these students have not yet learned how to write a full paper (that is the purpose of the assignment that you are about to grade) and have only conducted a simple literature review. Grade against the provided rubric, writing guide, calibration summary, and sample paper — not against publishable-paper standards. Therefore, it is possible for a student paper to receive a high grade, even if it does not meet publishable-paper standards. An abstract is not required, and can therefore never affect the grade negatively, even if it is poorly written or absent. However, if it is very well-written, it can positively affect the grade. For example, if you are on the fence between a 7.5 and 8, a strong abstract could tip the scale towards 8. As a general rule, a paper graded between 6.5 and 7.5 is around average. Grades 8-9 are considered above average; grades 9 and up are considered excellent. Grades lower than 6.5 are considered below average. The passing grade is 5.5. For context, about 7% of students receive a 5 or lower. About 3.2% receive a 9 or higher. About 14% receive an 8, and around 40% receive a 7. When deciding whether to fail a student, ask yourself whether they would be able to pass a bachelor's thesis the following year with the same skills. If the answer is no, then a failing grade is appropriate. If the answer is yes, then a passing grade is appropriate.",
+
+  "resources_preamble": "The rubric is your primary grading tool — all grades must be grounded in its criteria. The other resources provide supporting context and do not override the rubric. For the Results section, refer to the sample results section as the primary reference for what correct reporting looks like. For all other sections, the writing guide and calibration summary serve as general context.",
+
+  "grading_notes": "Some questions that might be helpful when assessing reasoning: Does the train of thought make sense (not the quality of the arguments themselves, but how they fit together), and is it easy to follow? Based on the arguments the student presents (regardless of their quality), is their conclusion justified? Does the student provide enough references for their arguments? For language and style: Is the student consistent in their language use (e.g., always using the same terms for their constructs)? Is the student's vocabulary unnecessarily complicated or oversimplified? Are references (outside of the four core articles) used appropriately content-wise? References older than 25 years may be used, but only for context or providing further info/evidence to existing argumentation. Crucial references must be newer than 25 years and relevant. Do not penalize language, style, or APA mistakes in any section other than Language & Style. An exception can be made if the language or sentence structure is so poor that it obscures the actual content, or if it is unclear what the student wanted to say to such an extent that it completely interrupts the flow of argumentation — in that case, a deduction within the affected content section is possible. Any given mistake may only be penalized once across the entire rubric.",
+
+  "output_format_preamble": "Respond with a JSON object containing EXACTLY the keys listed below. For checklist items, assign 1 if the item is met and 0 if it is not. For grades, use a number between 1.0 and 10.0 in 0.5 steps, or null if the section is entirely absent. For feedback, provide your reasoning behind each section grade. If a section is entirely absent, set its grade to null and begin its feedback with \"MISSING SECTION:\" followed by a brief note.",
+
+  "system_prompt_template": "{llm_role}\n\n## Resources\n{resources_preamble}\n\n### Writing guide\n{writing_guide}\n\n### Sample Results section\n{sample_results}\n\n### Calibration summary\n{calibration_summary}\n\n## Grading notes\n{grading_notes}\n\n## Grading rubric\n{rubric}\n\n## Output format\n{output_format}",
+
+  "user_message_prefix": "Please grade the following student paper.\n\n",
+  "user_message_suffix": "\n\nRespond with valid JSON.",
+
+  "checklist": {
+    "introduction": {
+      "tier0": {
+        "ko": [
+          "No identifiable research question is present",
+          "No hypothesis is stated",
+          "The line of reasoning is absent, wholly incoherent, or fundamentally incorrect",
+          "Fewer than 3 of the 4 required articles are present"
+        ]
+      },
+      "tier1": {
+        "core_criteria": [
+          "A research question is stated, even if somewhat vague",
+          "A hypothesis is stated",
+          "Societal relevance is addressed in some form",
+          "All 4 required articles are present (3 core + 1 self-found)",
+          "The line of reasoning leading to the RQ is present and broadly correct, even if not fully convincing",
+          "Key concepts are defined at least minimally"
+        ],
+        "additional_criteria": [
+          "The hypothesis follows logically from the prior argumentation",
+          "An attempt is made to connect articles to each other rather than summarizing them individually",
+          "Scientific relevance is mentioned"
+        ]
+      },
+      "tier2": {
+        "core_criteria": [
+          "The RQ is clear and relevant given the existing literature",
+          "The hypothesis is substantiated and follows logically from the argumentation",
+          "Prior research articles are connected to each other and to the RQ (not merely summarized)",
+          "Scientific relevance is argued for, not just mentioned",
+          "The theoretical framework is present and links the key variables"
+        ],
+        "additional_criteria": [
+          "Transitions between articles are smooth and explicitly argued",
+          "The student's own study is clearly positioned relative to gaps in prior research",
+          "Theory is used to create and substantiate the hypothesis, not just described",
+          "The societal relevance is well-aligned with the specific relevant population and design"
+        ]
+      },
+      "tier3": {
+        "core_criteria": [
+          "The line of reasoning is coherent and convincingly argued throughout",
+          "Prior research is used as building blocks for the argument, not just cited",
+          "The hypothesis is clearly derived from both theory and prior research",
+          "The design choice is explicitly justified in relation to prior research gaps"
+        ],
+        "additional_criteria": [
+          "Articles are ordered in a way that optimally supports the argument",
+          "The student explicitly addresses how their design improves on prior studies",
+          "Alternative interpretations or limitations of prior studies are acknowledged where relevant",
+          "The PEEL structure (or equivalent) is consistently applied at the paragraph level"
+        ]
+      },
+      "tier4": {
+        "core_criteria": [
+          "The overall line of reasoning is very coherent, logically tight, and fully convincing",
+          "The introduction reads as a seamless argument, not a collection of sections",
+          "The RQ is clearly and compellingly motivated by both societal and scientific relevance"
+        ],
+        "additional_criteria": [
+          "The theoretical framework is original, nuanced, or goes meaningfully beyond the provided articles",
+          "The student anticipates and addresses potential counterarguments",
+          "The introduction demonstrates an unusually mature grasp of scientific reasoning for this level"
+        ]
+      }
+    },
+
+    "methods": {
+      "tier0": {
+        "ko": [
+          "Participants section is absent or entirely uninformative",
+          "Materials section is absent or entirely uninformative",
+          "Procedure section is absent or entirely uninformative",
+          "The described design is incoherent or entirely unrelated to the stated RQ"
+        ]
+      },
+      "tier1": {
+        "core_criteria": [
+          "Participants: sample size is mentioned; some inclusion/exclusion criteria are given; mean age and gender are reported",
+          "Materials: the independent variable(s) are described at least minimally; at least one questionnaire is described with a reference",
+          "Procedure: a basic chronological description of the study is present",
+          "The design is broadly coherent with the stated RQ"
+        ],
+        "additional_criteria": [
+          "Allocation to conditions is described",
+          "Questionnaire descriptions include number of items and scoring range",
+          "Procedural language is avoided in the Materials section"
+        ]
+      },
+      "tier2": {
+        "core_criteria": [
+          "Participants: mean age with SD and gender distribution are reported; inclusion/exclusion criteria are substantiated (not just listed); compensation/reward is mentioned",
+          "Materials: all questionnaires are described with reference, number of items, a sample item or scale description, and scoring range with interpretation of min/max",
+          "Materials: the independent variable manipulation is described in sufficient detail to understand what each condition involves",
+          "Procedure: the chronological description covers the full study from start to finish; no new materials are introduced here",
+          "The design is clearly coherent with the RQ and hypotheses"
+        ],
+        "additional_criteria": [
+          "Differences and similarities between conditions are explicitly described",
+          "Reliability/validity information is provided for at least one questionnaire",
+          "Allocation method (e.g. randomization) is described",
+          "Rewards for participating are mentioned"
+        ]
+      },
+      "tier3": {
+        "core_criteria": [
+          "All conditions are described in sufficient detail that differences between them are unambiguous",
+          "All questionnaires include reference, items, sample item, scoring range, and meaning of scores; cut-off scores included where applicable",
+          "The procedure is complete, clearly written, and free of materials-level descriptions",
+          "All information is presented in the right place according to the Writing Guide"
+        ],
+        "additional_criteria": [
+          "Reliability and/or validity information is provided for all key instruments",
+          "The rationale for specific design choices (e.g. exclusion criteria, allocation method) is explicitly argued",
+          "Standardization measures to prevent confounds are described"
+        ]
+      },
+      "tier4": {
+        "core_criteria": [
+          "The methods section is complete, correct, and clearly written throughout",
+          "Every design choice is coherent with and traceable to the RQ and hypotheses"
+        ],
+        "additional_criteria": [
+          "The student goes beyond the checklist in a meaningful way (e.g. discussing validity threats, power considerations, or ethical considerations)",
+          "The methods section demonstrates an unusually thorough and careful approach to research design for this level"
+        ]
+      }
+    },
+
+    "results": {
+      "tier0": {
+        "ko": [
+          "No statistical analysis is reported",
+          "The reported analysis is entirely unrelated to the stated design",
+          "Results are reported at construct level only, with no statistical values"
+        ]
+      },
+      "tier1": {
+        "core_criteria": [
+          "The correct statistical test is identified and applied (or a reasonable approximation)",
+          "At least the main result (e.g. main effect and interaction) is reported with a test statistic and p-value",
+          "Descriptive statistics (means and SDs) are reported for at least the key variables",
+          "Results are reported at the operational level (scores, not constructs)"
+        ],
+        "additional_criteria": [
+          "Outlier check is mentioned",
+          "At least one assumption check is reported",
+          "A table or figure is included"
+        ]
+      },
+      "tier2": {
+        "core_criteria": [
+          "All relevant main effects and interactions are reported with test statistics and p-values",
+          "Demographic information (number, mean age, gender distribution per condition) is complete and presented in a table",
+          "Mean scores and standard deviation values per condition are complete and presented in a table",
+          "A graph of the score changes across conditions is included",
+          "Assumption checks are reported (e.g. normality, homogeneity of variance, sphericity)",
+          "Outlier check is reported with a clear decision and rationale",
+          "Post-hoc tests are reported where applicable, with correction method stated"
+        ],
+        "additional_criteria": [
+          "Effect sizes are reported",
+          "All tables and figures are correctly formatted and appropriately placed",
+          "The Central Limit Theorem or equivalent is invoked appropriately when assumptions are violated"
+        ]
+      },
+      "tier3": {
+        "core_criteria": [
+          "All assumption checks are reported correctly and completely",
+          "Post-hoc tests are complete, correctly interpreted, and the correction method is appropriate",
+          "Tables and/or figures are present, correctly formatted, and clearly labelled",
+          "The results are coherent with the stated design and procedure throughout"
+        ],
+        "additional_criteria": [
+          "Effect sizes are reported for all key comparisons",
+          "Violations of assumptions are handled correctly and explicitly justified",
+          "The reporting closely follows the structure and level of detail of the sample results section"
+        ]
+      },
+      "tier4": {
+        "core_criteria": [
+          "The results section is complete, correct, and clearly written throughout",
+          "Statistical reporting is fully consistent with APA style and the sample results section"
+        ],
+        "additional_criteria": [
+          "The student demonstrates an in-depth understanding of the statistical reasoning behind the analyses (e.g. explicitly connecting design choices to the chosen test)",
+          "The results section is exceptionally well-organized and easy to follow"
+        ]
+      }
+    },
+
+    "discussion": {
+      "tier0": {
+        "ko": [
+          "No main conclusion is stated",
+          "Results are not interpreted at the construct level anywhere",
+          "The discussion is entirely disconnected from the introduction"
+        ]
+      },
+      "tier1": {
+        "core_criteria": [
+          "The RQ is revisited and a main conclusion is stated",
+          "The hypothesis is addressed (supported, partially supported, or rejected)",
+          "At least the main finding is interpreted at the construct level",
+          "At least one study-specific limitation of the study is mentioned",
+          "At least one future direction recommendation is mentioned"
+        ],
+        "additional_criteria": [
+          "Results are compared to at least one prior study from the introduction",
+          "A broader implication (societal or scientific) is mentioned"
+        ]
+      },
+      "tier2": {
+        "core_criteria": [
+          "All main findings are interpreted at the construct level",
+          "Results are compared to prior research from the introduction, with a conclusion about consistency",
+          "At least one unexpected or inconsistent finding is discussed with a proposed explanation",
+          "The theoretical framework from the introduction is revisited",
+          "Both limitations are discussed with some specificity (not just listed, and not generic)",
+          "A broader implication for society or practice is argued"
+        ],
+        "additional_criteria": [
+          "Explanations for unexpected findings are grounded in prior research or theory",
+          "Recommendations for future research follow from the limitations",
+          "The discussion is clearly structured with a singular focus per paragraph"
+        ]
+      },
+      "tier3": {
+        "core_criteria": [
+          "The reasoning connecting results to the RQ and hypothesis is complete and coherent",
+          "Comparisons to prior research are substantive: similarities and differences are explained, not just noted",
+          "The theoretical framework is explicitly evaluated: does the result support, challenge, or refine it?",
+          "Limitations are critically evaluated and linked to their potential impact on the conclusions",
+          "Recommendations for future research are specific and follow logically from the discussion"
+        ],
+        "additional_criteria": [
+          "Alternative interpretations of the results are considered and addressed",
+          "The discussion explicitly connects back to the societal relevance from the introduction",
+          "The student demonstrates awareness of the broader research context beyond the four core articles"
+        ]
+      },
+      "tier4": {
+        "core_criteria": [
+          "The overall line of reasoning in the discussion is very coherent, complete, and convincingly argued",
+          "The discussion reads as a unified argument, not a checklist of required elements"
+        ],
+        "additional_criteria": [
+          "The student offers novel theoretical or practical insights that go meaningfully beyond the introduction",
+          "Alternative interpretations are not only raised but systematically evaluated",
+          "The discussion demonstrates an unusually mature level of critical scientific thinking for this level"
+        ]
+      }
+    },
+
+    "language_style": {
+      "tier0": {
+        "ko": [
+          "Language is broadly unscientific or consistently deeply flawed/difficult to read",
+          "Paragraphs are largely unstructured (no single focus, no topical sentences)",
+          "No attempt is made at citing references in any way"
+        ]
+      },
+      "tier1": {
+        "core_criteria": [
+          "The paper is generally understandable throughout",
+          "Most paragraphs have a discernible focus",
+          "Scientific language is used, even if imperfectly"
+        ],
+        "additional_criteria": [
+          "Topical sentences are present in most paragraphs",
+          "Grammar and spelling errors are occasional rather than frequent",
+          "APA referencing is mostly correct",
+          "Overall structure is mostly coherent"
+        ]
+      },
+      "tier2": {
+        "core_criteria": [
+          "All sections are clearly structured; most paragraphs have a single focus and a topical sentence",
+          "Scientific language is used correctly throughout",
+          "Grammar and spelling errors are few",
+          "APA errors are few and/or minor"
+        ],
+        "additional_criteria": [
+          "Sentences are concise with little redundancy",
+          "Transitions between paragraphs and sections are smooth",
+          "Vague or ambiguous statements are rare"
+        ]
+      },
+      "tier3": {
+        "core_criteria": [
+          "All paragraphs have a single focus",
+          "Scientific language is near-faultless",
+          "Grammar, spelling, and APA errors are rare"
+        ],
+        "additional_criteria": [
+          "Redundancy at the paragraph and sentence level is minimal",
+          "The writing is clear, precise, and easy to follow throughout",
+          "All paragraphs have a topical sentence"
+        ]
+      },
+      "tier4": {
+        "core_criteria": [
+          "Scientific language is near-faultless and shows a graceful, mature style (e.g. active voice, clear sentence connections, no discontinuous structures)",
+          "No APA errors",
+          "Virtually no redundancy at any level"
+        ],
+        "additional_criteria": [
+          "The writing style enhances the argumentation rather than merely conveying it",
+          "The paper reads as a polished, cohesive scientific document"
+        ]
+      }
+    }
+  }
+}
