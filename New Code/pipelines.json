@@ -1,0 +1,30 @@
+[
+  {
+    "pipeline_id": "A_feedback",
+    "grading_mode": "holistic",
+    "rubric_version": "original",
+    "model": "gpt-5.4",
+    "include_feedback": true
+  },
+  {
+    "pipeline_id": "A_no_feedback",
+    "grading_mode": "holistic",
+    "rubric_version": "original",
+    "model": "gpt-5.4",
+    "include_feedback": false
+  },
+  {
+    "pipeline_id": "B_feedback",
+    "grading_mode": "holistic",
+    "rubric_version": "improved",
+    "model": "gpt-5.4",
+    "include_feedback": true
+  },
+  {
+    "pipeline_id": "B_no_feedback",
+    "grading_mode": "holistic",
+    "rubric_version": "improved",
+    "model": "gpt-5.4",
+    "include_feedback": false
+  }
+]
