@@ -4,28 +4,26 @@ LLM_grades <- read.csv("results.csv")
 
 teacher_grades = teacher_grades %>% rename(student_id = PseudoID)
 
-combined = LLM_grades %>% left_join(teacher_grades)
+combined = LLM_grades %>% left_join(teacher_grades) %>%
+  mutate(run = str_extract(run_id, "(?<=run)\\d+")) 
 
 combined %>% ggplot(aes(x=Grade, y=final_grade, color = factor(student_id))) + 
  geom_point() +
   geom_abline(slope=1) +
-  ylim(c(4,10)) +
-  xlim(c(4,10)) +
-  facet_wrap(~rubric_version)
+  ylim(c(5,9)) +
+  xlim(c(5,9)) +
+  facet_wrap(~pipeline_id) +
+  theme_bw()
 
-write.csv(combined, "combined.csv")
+# write.csv(combined, "combined.csv")
 
-
+combined %>%
+  group_by(pipeline_id, student_id) %>%
+  summarise(r=cor(Grade, final_grade),
+            sd=sd(final_grade)) 
+  select(Grade, final_grade)
 library(dplyr)
 library(readr)
 library(stringr)
 
-CSV_PATH <- "/path/to/your/results.csv"
-
-new_results <- read_csv("results.csv")
-
-new_results <- new_results |>
-  mutate(run_number = as.integer(str_extract(run_id, "(?<=\\.run)\\d+")))
-
-write_csv(new_results, "new_results.csv")
 

@@ -1,0 +1,12 @@
+{
+  "original": {
+    "pipeline_id": "original",
+    "rubric_version": "original",
+    "include_checklist": false
+  },
+  "improved": {
+    "pipeline_id": "improved",
+    "rubric_version": "improved",
+    "include_checklist": true
+  }
+}
