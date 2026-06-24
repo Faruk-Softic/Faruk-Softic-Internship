@@ -1,19 +1,22 @@
 import os
 import sys
 import json
-import re
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
 import yaml
 from dotenv import load_dotenv
-from config import SECTION_KEYS, CHECKLIST
+
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+from config import (
+    SECTION_KEYS, SECTION_LABELS, CHECKLIST,
+    get_output_schema, get_latest_run_folder,
+)
 
 load_dotenv()
 
 # Path definitions
+
 PAPERS_FOLDER      = Path(os.environ["PAPERS_FOLDER"])
 GRADING_MATERIALS  = Path(os.environ["GRADING_MATERIALS_FOLDER"])
 EXPERIMENTS_FOLDER = Path(os.environ["EXPERIMENTS_FOLDER"])
@@ -30,33 +33,23 @@ RESOURCE_FILES = {
 
 EXAMPLE_PAPER_ID = os.environ.get("EXAMPLE_PAPER_ID", "").strip()
 
-# Get latest run folder based on its name
-def get_latest_run_folder(base: Path) -> Path:
-    folders = [
-        d for d in base.iterdir()
-        if d.is_dir() and re.fullmatch(r"run-\d+", d.name)
-    ]
-    if not folders:
-        raise FileNotFoundError(f"No run folders found in {base}")
-    return max(folders, key=lambda p: int(p.name.split("-")[1]))
+# File loading
 
-# Loading functions
 def load_text(path: Path) -> str:
     if path.suffix.lower() == ".docx":
         import docx
-        doc = docx.Document(path)
+        from docx.oxml.ns import qn
+        from docx.table import Table
+        doc   = docx.Document(path)
         parts = []
         for block in doc.element.body:
             tag = block.tag.split("}")[-1]
             if tag == "p":
-                from docx.oxml.ns import qn
                 text = "".join(node.text or "" for node in block.iter() if node.tag == qn("w:t"))
                 if text.strip():
                     parts.append(text)
             elif tag == "tbl":
-                from docx.table import Table
-                table = Table(block, doc)
-                for row in table.rows:
+                for row in Table(block, doc).rows:
                     row_text = "\t".join(cell.text.strip() for cell in row.cells)
                     if row_text.strip():
                         parts.append(row_text)
@@ -65,33 +58,65 @@ def load_text(path: Path) -> str:
         import pdfplumber
         with pdfplumber.open(path) as pdf:
             return "\n".join(page.extract_text() or "" for page in pdf.pages)
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+    return path.read_text(encoding="utf-8")
+
 
 def load_pipelines(path: Path) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(path.read_text(encoding="utf-8"))
+
 
 def load_papers(folder: Path) -> dict[str, str]:
-    papers = {}
-    for p in sorted(folder.iterdir()):
-        if p.suffix.lower() in {".txt", ".md"}:
-            papers[p.stem] = load_text(p)
+    papers = {
+        p.stem: load_text(p)
+        for p in sorted(folder.iterdir())
+        if p.suffix.lower() in {".txt", ".md"}
+    }
     if not papers:
         raise FileNotFoundError(f"No .txt or .md files found in {folder}")
     return papers
 
-# Prompt-building functions
-SECTION_LABELS = {
-    "intro":      "Introduction",
-    "methods":    "Methods",
-    "results":    "Results",
-    "discussion": "Discussion",
-    "lang_style": "Language & Style",
-}
+# Prompt building
 
-def build_system_prompt(pipeline: dict, rubric: str, resources: dict[str, str], include_feedback: bool) -> str:
+def build_system_prompt(
+    pipeline: dict,
+    rubric: str,
+    resources: dict[str, str],
+    include_feedback: bool,
+) -> str:
     include_checklist = pipeline["include_checklist"]
+    schema            = get_output_schema(include_checklist, include_feedback)
+
+    # Task instructions
+    if include_checklist:
+        task_steps = [
+            "For each section, you must:",
+            "1. Evaluate each checklist item (true/false).",
+        ]
+        step = 2
+        if include_feedback:
+            task_steps.append(f"{step}. Write a brief feedback comment.")
+            step += 1
+        task_steps.append(f"{step}. Assign a numeric grade (1.0–10.0).")
+    elif include_feedback:
+        task_steps = [
+            "For each section, you must:",
+            "1. Write a brief feedback comment.",
+            "2. Assign a numeric grade (1.0–10.0).",
+        ]
+    else:
+        task_steps = ["For each section, assign a numeric grade (1.0–10.0)."]
+
+    # Output schema block — section headers + keys, no trailing comma on last item
+    schema_lines = []
+    current_sec  = None
+    for i, (key, type_hint) in enumerate(schema):
+        sec = key.split("_grade")[0].split("_feedback")[0]
+        sec = next((s for s in SECTION_KEYS if key.startswith(s)), current_sec)
+        if sec != current_sec:
+            current_sec = sec
+            schema_lines.append(f"\n  // {SECTION_LABELS[sec]}")
+        comma = "," if i < len(schema) - 1 else ""
+        schema_lines.append(f'  "{key}": {type_hint}{comma}')
 
     lines = [
         "You are an expert grader for undergraduate psychology research papers.",
@@ -109,48 +134,15 @@ def build_system_prompt(pipeline: dict, rubric: str, resources: dict[str, str], 
         "## Your Task",
         "Grade the paper section by section using the rubric above.",
         "",
-    ]
-
-    if include_checklist:
-        lines += [
-            "For each section, you must:",
-            "1. Evaluate each checklist item (true/false).",
-            "2. Write a brief feedback comment." if include_feedback else "2. Assign a numeric grade (1.0–10.0).",
-            "3. Assign a numeric grade (1.0–10.0)." if include_feedback else "",
-            "",
-        ]
-    else:
-        if include_feedback:
-            lines += [
-                "For each section, you must:",
-                "1. Write a brief feedback comment.",
-                "2. Assign a numeric grade (1.0–10.0).",
-                "",
-            ]
-        else:
-            lines += [
-                "For each section, assign a numeric grade (1.0–10.0).",
-                "",
-            ]
-
-    lines += [
+        *task_steps,
+        "",
         "## Output Format",
         "Respond with a single JSON object. Do not include any text outside the JSON.",
         "Use the exact keys listed below.",
         "",
         "Keys to include:",
+        *schema_lines,
     ]
-
-    for sec in SECTION_KEYS:
-        label = SECTION_LABELS[sec]
-        if include_checklist:
-            lines.append(f"\n  // {label} — checklist items")
-            for key in CHECKLIST[sec]:
-                lines.append(f'  "{key}": true | false,')
-        if include_feedback:
-            lines.append(f'  "{sec}_feedback": "<string>",')
-        lines.append(f'  "{sec}_grade": <number>,')
-
     return "\n".join(lines)
 
 
@@ -158,15 +150,21 @@ def build_user_prompt(paper_text: str) -> str:
     return f"Please grade the following student paper:\n\n{paper_text}"
 
 
-def build_request(custom_id: str, system_prompt: str, user_prompt: str, model: str, reasoning_effort: str) -> dict:
+def build_request(
+    custom_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    model: str,
+    reasoning_effort: str,
+) -> dict:
     return {
         "custom_id": custom_id,
-        "method": "POST",
-        "url": "/v1/chat/completions",
+        "method":    "POST",
+        "url":       "/v1/chat/completions",
         "body": {
-            "model": model,
+            "model":            model,
             "reasoning_effort": reasoning_effort,
-            "response_format": {"type": "json_object"},
+            "response_format":  {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},
@@ -174,29 +172,32 @@ def build_request(custom_id: str, system_prompt: str, user_prompt: str, model: s
         },
     }
 
-# Make a custom ID for each call
-def make_custom_id(student_id: str, pipeline_id: str, run_label: str, run_n: int, total_runs: int) -> str:
+
+def make_custom_id(
+    run_label: str,
+    student_id: str,
+    pipeline_id: str,
+    run_n: int,
+    total_runs: int,
+) -> str:
     base = f"{run_label}__{student_id}__{pipeline_id}"
-    if total_runs > 1:
-        base += f"__run{run_n}"
-    return base
+    return f"{base}__run{run_n}" if total_runs > 1 else base
 
 # Main
+
 if __name__ == "__main__":
-    # Load run folder and config.yml
     run_folder = get_latest_run_folder(EXPERIMENTS_FOLDER)
     run_label  = run_folder.name
     print(f"Using run folder: {run_folder}")
 
-    with open(run_folder / "config.yml", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = yaml.safe_load((run_folder / "config.yml").read_text(encoding="utf-8"))
 
     model            = cfg.get("model", "gpt-4.5")
     reasoning_effort = cfg.get("reasoning_effort", "medium")
     include_feedback = cfg.get("include_feedback", False)
     repetitions      = cfg.get("repetitions", 1)
-    requested_pids   = cfg.get("pipelines", None)   # None = all
-    student_ids_cfg  = cfg.get("student_ids", [None])
+    requested_pids   = cfg.get("pipelines") or None        # None = all
+    student_ids_cfg  = cfg.get("student_ids") or []        # [] = all
 
     print(f"  model={model}, reasoning_effort={reasoning_effort}, "
           f"include_feedback={include_feedback}, repetitions={repetitions}")
@@ -223,13 +224,13 @@ if __name__ == "__main__":
 
     print("Loading papers...")
     all_papers = load_papers(PAPERS_FOLDER)
-    if student_ids_cfg and student_ids_cfg != [None]:
-        papers = {sid: all_papers[sid] for sid in student_ids_cfg if sid in all_papers}
-    else:
-        papers = all_papers
+    papers = (
+        {sid: all_papers[sid] for sid in student_ids_cfg if sid in all_papers}
+        if student_ids_cfg else all_papers
+    )
     print(f"  ✓ {len(papers)} paper(s) found.")
 
-    # Build requests — ordered: paper → pipeline → run
+    # Build requests — in the order: paper - pipeline - repetition
     requests     = []
     example_reqs = []
     example_id   = EXAMPLE_PAPER_ID or next(iter(papers))
@@ -242,13 +243,13 @@ if __name__ == "__main__":
             user_p = build_user_prompt(paper_text)
 
             for run_n in range(1, repetitions + 1):
-                custom_id = make_custom_id(student_id, pid, run_label, run_n, repetitions)
-                req = build_request(custom_id, sys_p, user_p, model, reasoning_effort)
+                custom_id = make_custom_id(run_label, student_id, pid, run_n, repetitions)
+                req       = build_request(custom_id, sys_p, user_p, model, reasoning_effort)
                 requests.append(req)
                 if student_id == example_id and run_n == 1:
                     example_reqs.append(req)
 
-    # Write batch input JSONL (for easier examination)
+    # Write batch input JSONL
     batch_path = run_folder / "batch_input.jsonl"
     with open(batch_path, "w", encoding="utf-8") as f:
         for req in requests:
@@ -257,27 +258,28 @@ if __name__ == "__main__":
 
     # Write example JSON
     example_path = run_folder / "prompts_example.json"
-    with open(example_path, "w", encoding="utf-8") as f:
-        json.dump(example_reqs, f, indent=2, ensure_ascii=False)
+    example_path.write_text(
+        json.dumps(example_reqs, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     print(f"  ✓ prompts_example.json written (paper: '{example_id}').")
 
-    # Write partial manifest ("notes" is added manually)
+    # Write manifest
     manifest = {
-        "run_id":            run_label,
-        "created_at":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "model":             model,
-        "reasoning_effort":  reasoning_effort,
-        "include_feedback":  include_feedback,
-        "repetitions":       repetitions,
-        "pipelines":         [p["pipeline_id"] for p in pipelines],
-        "n_papers":          len(papers),
-        "n_requests":        len(requests),
-        "status":            "pending",
-        "notes":             cfg.get("notes", ""),
+        "run_id":           run_label,
+        "created_at":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "model":            model,
+        "reasoning_effort": reasoning_effort,
+        "include_feedback": include_feedback,
+        "repetitions":      repetitions,
+        "pipelines":        [p["pipeline_id"] for p in pipelines],
+        "n_papers":         len(papers),
+        "n_requests":       len(requests),
+        "status":           "pending",
+        "notes":            cfg.get("notes", ""),
     }
     manifest_path = run_folder / "manifest.json"
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"  ✓ manifest.json written.")
 
     print(f"\nDone. Review '{run_folder}' before submitting.")

@@ -1,4 +1,8 @@
-# Section keys
+import re
+from pathlib import Path
+
+# Defining sections and their keys
+
 SECTION_KEYS = [
     "intro",
     "methods",
@@ -15,7 +19,6 @@ SECTION_LABELS = {
     "lang_style": "Language & Style",
 }
 
-
 SECTION_WEIGHTS = {
     "intro":      0.30,
     "methods":    0.15,
@@ -24,7 +27,8 @@ SECTION_WEIGHTS = {
     "lang_style": 0.10,
 }
 
-# Checklist keys for the "improved" pipeline
+# Checklist keys
+
 CHECKLIST = {
     "intro": [
         "intro_societal_relevance_present",
@@ -60,3 +64,49 @@ CHECKLIST = {
 }
 
 CHECKLIST_KEYS = [key for keys in CHECKLIST.values() for key in keys]
+
+# Output structure definition
+
+def get_output_schema(include_checklist: bool, include_feedback: bool) -> list[tuple[str, str]]:
+    """
+    Returns an ordered list of (key, type_hint) pairs that define the expected
+    JSON output from the model. Used both to build the prompt and to parse the reply.
+    """
+    fields = []
+    for sec in SECTION_KEYS:
+        if include_checklist:
+            for key in CHECKLIST[sec]:
+                fields.append((key, "true | false"))
+        if include_feedback:
+            fields.append((f"{sec}_feedback", '"<string>"'))
+        fields.append((f"{sec}_grade", "<number>"))
+    return fields
+
+# CSV fieldnames - makes sure CSV output is in line with the schema above
+
+def get_csv_fieldnames(include_checklist: bool, include_feedback: bool) -> list[str]:
+
+    base = [
+        "run_id", "run_label", "student_id", "pipeline_id", "repetition",
+        "model", "reasoning_effort", "timestamp", "input_tokens", "output_tokens",
+    ]
+    for sec in SECTION_KEYS:
+        base.append(f"{sec}_grade")
+    base += ["final_grade", "missing_sections"]
+    if include_feedback:
+        for sec in SECTION_KEYS:
+            base.append(f"{sec}_feedback")
+    if include_checklist:
+        base.extend(CHECKLIST_KEYS)
+    return base
+
+# Run folder detection
+
+def get_latest_run_folder(base: Path) -> Path:
+    folders = [
+        d for d in base.iterdir()
+        if d.is_dir() and re.fullmatch(r"run-\d+", d.name)
+    ]
+    if not folders:
+        raise FileNotFoundError(f"No run folders found in '{base}'.")
+    return max(folders, key=lambda d: int(d.name.split("-")[1]))
