@@ -160,15 +160,13 @@ def build_request(
     return {
         "custom_id": custom_id,
         "method":    "POST",
-        "url":       "/v1/chat/completions",
+        "url":       "/v1/responses",
         "body": {
-            "model":            model,
-            "reasoning_effort": reasoning_effort,
-            "response_format":  {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
+            "model":        model,
+            "reasoning":    {"effort": reasoning_effort},
+            "text":         {"format": {"type": "json_object"}},
+            "instructions": system_prompt,
+            "input":        user_prompt,
         },
     }
 

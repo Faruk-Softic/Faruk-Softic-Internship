@@ -52,12 +52,18 @@ def _parse_grade(value) -> Optional[float]:
 
 def _get_tokens(result_line: dict) -> tuple[Optional[int], Optional[int]]:
     usage = result_line.get("response", {}).get("body", {}).get("usage", {})
-    return usage.get("prompt_tokens"), usage.get("completion_tokens")
+    return usage.get("input_tokens"), usage.get("output_tokens")
 
 
 def _extract_reply(result_line: dict) -> Optional[str]:
     try:
-        return result_line["response"]["body"]["choices"][0]["message"]["content"]
+        output = result_line["response"]["body"]["output"]
+        for item in output:
+            if item.get("type") == "message":
+                for block in item.get("content", []):
+                    if block.get("type") == "output_text":
+                        return block["text"]
+        return None
     except (KeyError, IndexError, TypeError):
         return None
 
@@ -100,7 +106,7 @@ def load_metadata(jsonl_path: Path) -> dict:
             "pipeline_id":      parts[2],
             "repetition":       parts[3] if len(parts) > 3 else "run1",
             "model":            req["body"]["model"],
-            "reasoning_effort": req["body"].get("reasoning_effort"),
+            "reasoning_effort": req["body"].get("reasoning", {}).get("effort"),
         }
     return metadata
 
@@ -193,7 +199,7 @@ if __name__ == "__main__":
 
     batch = client.batches.create(
         input_file_id=uploaded.id,
-        endpoint="/v1/chat/completions",
+        endpoint="/v1/responses",
         completion_window="24h",
     )
     print(f"  ✓ Batch submitted: {batch.id}")
