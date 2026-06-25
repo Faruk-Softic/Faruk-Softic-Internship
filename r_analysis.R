@@ -15,7 +15,7 @@ combined %>% ggplot(aes(x=Grade, y=final_grade, color = factor(student_id))) +
   facet_wrap(~pipeline_id) +
   theme_bw()
 
-# write.csv(combined, "combined.csv")
+write.csv(combined, "combined.csv")
 
 combined %>%
   group_by(pipeline_id, student_id) %>%

@@ -55,17 +55,25 @@ def _get_tokens(result_line: dict) -> tuple[Optional[int], Optional[int]]:
     return usage.get("input_tokens"), usage.get("output_tokens")
 
 
-def _extract_reply(result_line: dict) -> Optional[str]:
-    try:
-        output = result_line["response"]["body"]["output"]
-        for item in output:
-            if item.get("type") == "message":
-                for block in item.get("content", []):
-                    if block.get("type") == "output_text":
-                        return block["text"]
-        return None
-    except (KeyError, IndexError, TypeError):
-        return None
+def _extract_reply(response_body: dict) -> tuple[str, str]:
+    """Return (message_text, reasoning_summary) from a response body."""
+    message_text      = ""
+    reasoning_summary = ""
+
+    for item in response_body.get("output", []):
+        if item.get("type") == "message":
+            for block in item.get("content", []):
+                if block.get("type") == "output_text":
+                    message_text = block["text"]
+        elif item.get("type") == "reasoning":
+            blocks = [
+                b["text"]
+                for b in item.get("summary", [])
+                if b.get("type") == "summary_text"
+            ]
+            reasoning_summary = "\n\n".join(blocks)
+
+    return message_text, reasoning_summary
 
 
 def parse_reply(raw: str, include_checklist: bool, include_feedback: bool) -> dict:
@@ -132,13 +140,15 @@ def process_result(
 
     if meta is None:
         print(f"  ⚠  No metadata for '{custom_id}' — skipping.")
-        return None
+        return Nones
     if error := result_line.get("error"):
         print(f"  ✗  API error for '{custom_id}': {error}")
         return None
 
-    raw_reply = _extract_reply(result_line)
-    if raw_reply is None:
+    response_body                = result_line.get("response", {}).get("body", {})
+    raw_reply, reasoning_summary = _extract_reply(response_body)
+
+    if not raw_reply:
         print(f"  ✗  Could not extract reply for '{custom_id}'.")
         return None
 
@@ -155,26 +165,25 @@ def process_result(
     if final_grade is None:
         print(f"  ⚠  '{custom_id}' — could not compute final grade.")
 
-    # Build row using centralized fieldnames to guarantee column order
     fieldnames = get_csv_fieldnames(include_checklist, include_feedback)
     row = {
-        "run_id":           meta["run_id"],
-        "run_label":        meta["run_label"],
-        "student_id":       meta["student_id"],
-        "pipeline_id":      meta["pipeline_id"],
-        "repetition":       meta["repetition"],
-        "model":            meta["model"],
-        "reasoning_effort": meta["reasoning_effort"],
-        "timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "input_tokens":     input_tokens,
-        "output_tokens":    output_tokens,
+        "run_id":            meta["run_id"],
+        "run_label":         meta["run_label"],
+        "student_id":        meta["student_id"],
+        "pipeline_id":       meta["pipeline_id"],
+        "repetition":        meta["repetition"],
+        "model":             meta["model"],
+        "reasoning_effort":  meta["reasoning_effort"],
+        "timestamp":         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "input_tokens":      input_tokens,
+        "output_tokens":     output_tokens,
+        "reasoning_summary": reasoning_summary,
         **{f"{k}_grade": parsed.get(f"{k}_grade") for k in SECTION_KEYS},
-        "final_grade":      round(final_grade, 2) if final_grade is not None else None,
-        "missing_sections": parsed["missing_sections"],
+        "final_grade":       round(final_grade, 2) if final_grade is not None else None,
+        "missing_sections":  parsed["missing_sections"],
         **({f"{k}_feedback": parsed.get(f"{k}_feedback") for k in SECTION_KEYS} if include_feedback else {}),
         **({k: parsed.get(k) for k in CHECKLIST_KEYS} if include_checklist else {}),
     }
-    # Ensure only declared fieldnames are written (guards against schema drift)
     return {k: row.get(k) for k in fieldnames}
 
 # Main
@@ -187,7 +196,6 @@ if __name__ == "__main__":
 
     manifest          = load_json(manifest_path)
     include_feedback  = manifest.get("include_feedback", False)
-    # Infer include_checklist from which pipelines are in this run
     pipeline_ids      = manifest.get("pipelines", [])
     include_checklist = "improved" in pipeline_ids
 
@@ -211,13 +219,20 @@ if __name__ == "__main__":
     })
     save_json(manifest_path, manifest)
 
-    print("  Polling for completion (Ctrl+C to cancel)...", end="", flush=True)
+    print("  Polling for completion (Ctrl+C to cancel)...")
     try:
         while batch.status not in {"completed", "failed", "expired", "cancelled"}:
             time.sleep(30)
             batch = client.batches.retrieve(batch.id)
-            print(".", end="", flush=True)
-        print(f" {batch.status.upper()}")
+            counts = batch.request_counts
+            print(
+                f"  [{datetime.now().strftime('%H:%M:%S')}] "
+                f"status={batch.status} | "
+                f"completed={counts.completed} | "
+                f"failed={counts.failed} | "
+                f"total={counts.total}"
+            )
+        print(f"  [{datetime.now().strftime('%H:%M:%S')}] {batch.status.upper()}")
     except KeyboardInterrupt:
         print("\n  Cancelling batch on OpenAI...")
         client.batches.cancel(batch.id)
@@ -232,12 +247,23 @@ if __name__ == "__main__":
         print(f"  ✗ Batch ended with status '{batch.status}'. Exiting.")
         raise SystemExit(1)
 
-    # Download output JSONL
+    if batch.error_file_id:
+        error_path = run_folder / f"{run_label}_errors.jsonl"
+        error_path.write_bytes(client.files.content(batch.error_file_id).content)
+        print(f"  ⚠  Error file saved: '{error_path}'")
+        errors_text = error_path.read_text(encoding="utf-8")
+        print(f"  First error: {errors_text.splitlines()[0]}")
+
+    if not batch.output_file_id:
+        print(f"  ✗ No output file — all requests failed. Check '{run_label}_errors.jsonl'.")
+        manifest["status"] = "failed"
+        save_json(manifest_path, manifest)
+        raise SystemExit(1)
+
     output_jsonl_path = run_folder / f"{run_label}_output.jsonl"
     output_jsonl_path.write_bytes(client.files.content(batch.output_file_id).content)
     print(f"  ✓ Output JSONL saved: '{output_jsonl_path}'")
 
-    # Parse results
     result_lines = [
         json.loads(line)
         for line in output_jsonl_path.read_text(encoding="utf-8").strip().splitlines()

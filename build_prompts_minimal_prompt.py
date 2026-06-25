@@ -82,6 +82,7 @@ def build_system_prompt(
     rubric: str,
     resources: dict[str, str],
     include_feedback: bool,
+    include_resources: bool,
 ) -> str:
     include_checklist = pipeline["include_checklist"]
     schema            = get_output_schema(include_checklist, include_feedback)
@@ -122,12 +123,19 @@ def build_system_prompt(
         "You are an expert grader for undergraduate psychology research papers.",
         "You will be given a student paper and grading materials.",
         "",
-        "## Writing Guide",
-        resources["writing_guide"],
-        "",
-        "## Sample Results Section",
-        resources["sample_results"],
-        "",
+    ]
+
+    if include_resources:
+        lines += [
+            "## Writing Guide",
+            resources["writing_guide"],
+            "",
+            "## Sample Results Section",
+            resources["sample_results"],
+            "",
+        ]
+
+    lines += [
         "## Grading Rubric",
         rubric,
         "",
@@ -147,7 +155,7 @@ def build_system_prompt(
 
 
 def build_user_prompt(paper_text: str) -> str:
-    return f"Please grade the following student paper:\n\n{paper_text}"
+    return f"Please grade the following student paper and respond with valid JSON:\n\n{paper_text}"
 
 
 def build_request(
@@ -156,6 +164,7 @@ def build_request(
     user_prompt: str,
     model: str,
     reasoning_effort: str,
+    reasoning_summary: str,
 ) -> dict:
     return {
         "custom_id": custom_id,
@@ -163,7 +172,7 @@ def build_request(
         "url":       "/v1/responses",
         "body": {
             "model":        model,
-            "reasoning":    {"effort": reasoning_effort},
+            "reasoning":    {"effort": reasoning_effort, "summary": reasoning_summary},
             "text":         {"format": {"type": "json_object"}},
             "instructions": system_prompt,
             "input":        user_prompt,
@@ -190,15 +199,19 @@ if __name__ == "__main__":
 
     cfg = yaml.safe_load((run_folder / "config.yml").read_text(encoding="utf-8"))
 
-    model            = cfg.get("model", "gpt-4.5")
-    reasoning_effort = cfg.get("reasoning_effort", "medium")
-    include_feedback = cfg.get("include_feedback", False)
-    repetitions      = cfg.get("repetitions", 1)
-    requested_pids   = cfg.get("pipelines") or None        # None = all
-    student_ids_cfg  = cfg.get("student_ids") or []        # [] = all
+    model             = cfg.get("model", "gpt-4.5")
+    reasoning_effort  = cfg.get("reasoning_effort", "medium")
+    reasoning_summary = cfg.get("reasoning_summary", "auto")
+    include_feedback  = cfg.get("include_feedback", False)
+    include_resources = cfg.get("include_resources", True)
+    repetitions       = cfg.get("repetitions", 1)
+    requested_pids    = cfg.get("pipelines") or None        # None = all
+    student_ids_cfg   = cfg.get("student_ids") or []        # [] = all
 
     print(f"  model={model}, reasoning_effort={reasoning_effort}, "
-          f"include_feedback={include_feedback}, repetitions={repetitions}")
+          f"reasoning_summary={reasoning_summary}, "
+          f"include_feedback={include_feedback}, include_resources={include_resources}, "
+          f"repetitions={repetitions}")
 
     print("Loading rubrics...")
     rubrics = {}
@@ -207,9 +220,13 @@ if __name__ == "__main__":
         print(f"  ✓ '{name}' loaded.")
 
     print("Loading resources...")
-    resources = {name: load_text(path) for name, path in RESOURCE_FILES.items()}
-    for name in resources:
-        print(f"  ✓ '{name}' loaded.")
+    resources = {}
+    if include_resources:
+        resources = {name: load_text(path) for name, path in RESOURCE_FILES.items()}
+        for name in resources:
+            print(f"  ✓ '{name}' loaded.")
+    else:
+        print("  ℹ  Resources skipped (include_resources=false).")
 
     print("Loading pipelines...")
     all_pipelines = load_pipelines(PIPELINES_FILE)
@@ -237,12 +254,12 @@ if __name__ == "__main__":
         for pipeline in pipelines:
             pid    = pipeline["pipeline_id"]
             rubric = rubrics[pipeline["rubric_version"]]
-            sys_p  = build_system_prompt(pipeline, rubric, resources, include_feedback)
+            sys_p  = build_system_prompt(pipeline, rubric, resources, include_feedback, include_resources)
             user_p = build_user_prompt(paper_text)
 
             for run_n in range(1, repetitions + 1):
                 custom_id = make_custom_id(run_label, student_id, pid, run_n, repetitions)
-                req       = build_request(custom_id, sys_p, user_p, model, reasoning_effort)
+                req       = build_request(custom_id, sys_p, user_p, model, reasoning_effort, reasoning_summary)
                 requests.append(req)
                 if student_id == example_id and run_n == 1:
                     example_reqs.append(req)
@@ -264,17 +281,19 @@ if __name__ == "__main__":
 
     # Write manifest
     manifest = {
-        "run_id":           run_label,
-        "created_at":       datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "model":            model,
-        "reasoning_effort": reasoning_effort,
-        "include_feedback": include_feedback,
-        "repetitions":      repetitions,
-        "pipelines":        [p["pipeline_id"] for p in pipelines],
-        "n_papers":         len(papers),
-        "n_requests":       len(requests),
-        "status":           "pending",
-        "notes":            cfg.get("notes", ""),
+        "run_id":             run_label,
+        "created_at":         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "model":              model,
+        "reasoning_effort":   reasoning_effort,
+        "reasoning_summary":  reasoning_summary,
+        "include_feedback":   include_feedback,
+        "include_resources":  include_resources,
+        "repetitions":        repetitions,
+        "pipelines":          [p["pipeline_id"] for p in pipelines],
+        "n_papers":           len(papers),
+        "n_requests":         len(requests),
+        "status":             "pending",
+        "notes":              cfg.get("notes", ""),
     }
     manifest_path = run_folder / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
