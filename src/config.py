@@ -262,7 +262,7 @@ def get_output_schema(include_checklist: bool, include_feedback: bool) -> list[t
             for key in CHECKLIST[sec]:
                 fields.append((key, "true | false"))
         if include_feedback:
-            fields.append((f"{sec}_feedback", '"<string>"'))
+            fields.append((f"{sec}_feedback", f'"<reasoning behind the {SECTION_LABELS[sec]} grade>"'))
         fields.append((f"{sec}_grade", "<number>"))
     return fields
 

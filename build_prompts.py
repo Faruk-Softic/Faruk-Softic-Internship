@@ -1,3 +1,9 @@
+"""
+
+Builds batch_input.jsonl and prompts_example.json for the latest run folder.
+
+"""
+
 import os
 import sys
 import json
@@ -33,42 +39,23 @@ RESOURCE_FILES = {
 
 EXAMPLE_PAPER_ID = os.environ.get("EXAMPLE_PAPER_ID", "").strip()
 
-LLM_ROLE_WITH_RESOURCES = (
-    "You are an independent grader tasked with grading first scientific papers written by second-year psychology "
+
+LLM_ROLE = (
+   "You are an independent grader tasked with grading first scientific papers written by second-year psychology "
     "students. The course focuses on scientific reasoning and argumentation. Keep in mind that "
     "these students have not yet learned how to write a full paper (that is the purpose of "
     "the assignment that you are about to grade) and have only conducted a "
     "simple literature review. Grade against the provided rubric, "
     "writing guide, and sample paper — not against publishable-paper standards. Therefore, "
     "it is possible for a student paper to receive a high grade, even if it does not meet publishable-paper standards. "
-    "An abstract is not required, and can therefore never affect the grade negatively, even if it is poorly written or absent. "
-    "However, if it is very well-written, it can positively affect the grade. For example, if you "
-    "are on the fence between a 7.5 and 8, a strong abstract could tip the scale towards 8. "
+    "An abstract is not required, and its absence must not be penalized, but it can positively affect the grade, if well-written. "
     "As a general rule, a paper graded between 6.5 and 7.5 is around average. Grades 8-9 are considered "
     "above average; grades 9 and up are considered excellent. Grades lower than 6.5 are considered "
-    "below average. All grades between 5 and 9 are relatively common. The passing grade is 5.5. "
-    "Your task is to provide as objective and accurate a grade as possible "
-    "given the resources and rubrics of the course. Keep in mind that it is essential that you are as objective as "
-    "possible. Being either too strict or too lenient overall is a disservice to students overall. The rubric should be the primary tool for grading."
-)
-
-LLM_ROLE_WITHOUT_RESOURCES = (
-    "You are an independent grader tasked with grading first scientific papers written by second-year psychology "
-    "students. The course focuses on scientific reasoning and argumentation. Keep in mind that "
-    "these students have not yet learned how to write a full paper (that is the purpose of "
-    "the assignment that you are about to grade) and have only conducted a "
-    "simple literature review. Grade against the provided rubric — not against publishable-paper standards. Therefore, "
-    "it is possible for a student paper to receive a high grade, even if it does not meet publishable-paper standards. "
-    "An abstract is not required, and can therefore never affect the grade negatively, even if it is poorly written or absent. "
-    "However, if it is very well-written, it can positively affect the grade. For example, if you "
-    "are on the fence between a 7.5 and 8, a strong abstract could tip the scale towards 8. "
-    "As a general rule, a paper graded between 6.5 and 7.5 is around average. Grades 8-9 are considered "
-    "above average; grades 9 and up are considered excellent. Grades lower than 6.5 are considered "
-    "below average. All grades between 5 and 9 are relatively common.The passing grade is 5.5. "
-    "Your task is to provide as objective and accurate a grade as possible "
-    "given the rubric of the course. Keep in mind that it is essential that you are as objective as "
-    "possible. Being either too strict or too lenient overall is a disservice to students overall.  "
-    "To do so, make use of the grading rubric. "
+    "below average. "
+    "Grades in the Dutch system run from 1 to 10, with 5.5 being the lowest passing grade. "
+    "Your task is to provide as objective and accurate a grade as possible given the rubric "
+    "and resources of the course. "
+    "Being too lenient or too harsh is a disservice to the student and the course. "
 )
 
 # File loading
@@ -115,63 +102,84 @@ def load_papers(folder: Path) -> dict[str, str]:
 
 # Prompt building
 
+# Explicit prefix map: lang_style checklist keys use prefix "lang_",
+# not "lang_style_", so startswith() on the section key would fail without this.
+_SEC_PREFIX = {
+    "intro":      "intro",
+    "methods":    "methods",
+    "results":    "results",
+    "discussion": "discussion",
+    "lang_style": "lang",
+}
+
+
 def build_system_prompt(
     pipeline: dict,
     rubric: str,
     resources: dict[str, str],
     include_feedback: bool,
-    include_resources: bool,
 ) -> str:
-    include_checklist = pipeline["include_checklist"]
-    schema            = get_output_schema(include_checklist, include_feedback)
-    role              = LLM_ROLE_WITH_RESOURCES if include_resources else LLM_ROLE_WITHOUT_RESOURCES
+    """
+    Build the full system prompt for a given pipeline.
 
-    # Task instructions
+    Output order per section:
+      1. Checklist items  (true/false) — only for pipelines with include_checklist: true
+      2. Feedback comment             — only if include_feedback=True
+      3. Numeric grade
+    """
+    include_checklist = pipeline.get("include_checklist", False)
+    schema            = get_output_schema(include_checklist, include_feedback)
+    role              = LLM_ROLE
+
+    # Task instruction block
     if include_checklist:
         task_steps = [
-            "For each section, you must:",
-            "1. Evaluate each checklist item (true/false).",
+            "For each section, work through the following steps in order:",
+            "1. Evaluate each checklist item (true/false) based on the rubric criteria.",
         ]
         step = 2
         if include_feedback:
-            task_steps.append(f"{step}. Write a brief feedback comment.")
+            task_steps.append(f"{step}. Write a brief feedback comment explaining your reasoning behind the grade.")
             step += 1
-        task_steps.append(f"{step}. Assign a numeric grade (1.0–10.0).")
+        task_steps.append(
+            f"{step}. Assign a numeric grade (1.0-10.0 in 0.5 steps). "
+            "The grade must be consistent with the tier reached based on the checklist: "
+            "a paper that fails to meet all core criteria for a tier cannot be graded within "
+            "that tier's range, regardless of additional criteria."
+        )
     elif include_feedback:
         task_steps = [
-            "For each section, you must:",
-            "1. Write a brief feedback comment.",
-            "2. Assign a numeric grade (1.0–10.0).",
+            "For each section, work through the following steps in order:",
+            "1. Write a brief feedback comment explaining your reasoning behind the grade.",
+            "2. Assign a numeric grade (1.0-10.0 in 0.5 steps).",
         ]
     else:
-        task_steps = ["For each section, assign a numeric grade (1.0–10.0)."]
+        task_steps = ["For each section, assign a numeric grade (1.0-10.0 in 0.5 steps)."]
 
-    # Output schema block — section headers + keys, no trailing comma on last item
+    # Output schema block
     schema_lines = []
     current_sec  = None
     for i, (key, type_hint) in enumerate(schema):
-        sec = key.split("_grade")[0].split("_feedback")[0]
-        sec = next((s for s in SECTION_KEYS if key.startswith(s)), current_sec)
+        sec = next(
+            (s for s in SECTION_KEYS if key.startswith(_SEC_PREFIX[s])),
+            current_sec,
+        )
         if sec != current_sec:
             current_sec = sec
             schema_lines.append(f"\n  // {SECTION_LABELS[sec]}")
         comma = "," if i < len(schema) - 1 else ""
         schema_lines.append(f'  "{key}": {type_hint}{comma}')
 
-    lines = [
-        role,
+    lines = [role, ""]
+
+    lines += [
+        "## Writing Guide",
+        resources["writing_guide"],
+        "",
+        "## Sample Results Section",
+        resources["sample_results"],
         "",
     ]
-
-    if include_resources:
-        lines += [
-            "## Writing Guide",
-            resources["writing_guide"],
-            "",
-            "## Sample Results Section",
-            resources["sample_results"],
-            "",
-        ]
 
     lines += [
         "## Grading Rubric",
@@ -184,10 +192,11 @@ def build_system_prompt(
         "",
         "## Output Format",
         "Respond with a single JSON object. Do not include any text outside the JSON.",
-        "Use the exact keys listed below.",
+        "Use the exact keys listed below, in the order shown.",
         "",
-        "Keys to include:",
+        "{",
         *schema_lines,
+        "}",
     ]
     return "\n".join(lines)
 
@@ -237,19 +246,22 @@ if __name__ == "__main__":
 
     cfg = yaml.safe_load((run_folder / "config.yml").read_text(encoding="utf-8"))
 
-    model             = cfg.get("model", "gpt-4.5")
+    # model has no fallback — raises KeyError immediately if missing from config.yml,
+    # so a missing or misnamed key never silently runs the wrong model.
+    model             = cfg["model"]
     reasoning_effort  = cfg.get("reasoning_effort", "medium")
     reasoning_summary = cfg.get("reasoning_summary", "auto")
     include_feedback  = cfg.get("include_feedback", False)
-    include_resources = cfg.get("include_resources", True)
     repetitions       = cfg.get("repetitions", 1)
-    requested_pids    = cfg.get("pipelines") or None        # None = all
-    student_ids_cfg   = cfg.get("student_ids") or []        # [] = all
+    requested_pids    = cfg.get("pipelines") or None   # None = all
+    student_ids_cfg   = cfg.get("student_ids") or []   # [] = all
 
-    print(f"  model={model}, reasoning_effort={reasoning_effort}, "
-          f"reasoning_summary={reasoning_summary}, "
-          f"include_feedback={include_feedback}, include_resources={include_resources}, "
-          f"repetitions={repetitions}")
+    print(
+        f"  model={model}, reasoning_effort={reasoning_effort}, "
+        f"reasoning_summary={reasoning_summary}, "
+        f"include_feedback={include_feedback}, "
+        f"repetitions={repetitions}"
+    )
 
     print("Loading rubrics...")
     rubrics = {}
@@ -258,13 +270,9 @@ if __name__ == "__main__":
         print(f"  ✓ '{name}' loaded.")
 
     print("Loading resources...")
-    resources = {}
-    if include_resources:
-        resources = {name: load_text(path) for name, path in RESOURCE_FILES.items()}
-        for name in resources:
-            print(f"  ✓ '{name}' loaded.")
-    else:
-        print("  ℹ  Resources skipped (include_resources=false).")
+    resources = {name: load_text(path) for name, path in RESOURCE_FILES.items()}
+    for name in resources:
+        print(f"  ✓ '{name}' loaded.")
 
     print("Loading pipelines...")
     all_pipelines = load_pipelines(PIPELINES_FILE)
@@ -273,7 +281,9 @@ if __name__ == "__main__":
         if requested_pids else list(all_pipelines.values())
     )
     for p in pipelines:
-        print(f"  ✓ '{p['pipeline_id']}' loaded.")
+        print(f"  ✓ '{p['pipeline_id']}' loaded "
+              f"(rubric={p['rubric_version']}, "
+              f"checklist={p.get('include_checklist', False)}).")
 
     print("Loading papers...")
     all_papers = load_papers(PAPERS_FOLDER)
@@ -283,7 +293,7 @@ if __name__ == "__main__":
     )
     print(f"  ✓ {len(papers)} paper(s) found.")
 
-    # Build requests — in the order: paper - pipeline - repetition
+    # Build requests: paper, then pipeline, then repetition
     requests     = []
     example_reqs = []
     example_id   = EXAMPLE_PAPER_ID or next(iter(papers))
@@ -292,17 +302,21 @@ if __name__ == "__main__":
         for pipeline in pipelines:
             pid    = pipeline["pipeline_id"]
             rubric = rubrics[pipeline["rubric_version"]]
-            sys_p  = build_system_prompt(pipeline, rubric, resources, include_feedback, include_resources)
+            sys_p  = build_system_prompt(
+                pipeline, rubric, resources, include_feedback
+            )
             user_p = build_user_prompt(paper_text)
 
             for run_n in range(1, repetitions + 1):
                 custom_id = make_custom_id(run_label, student_id, pid, run_n, repetitions)
-                req       = build_request(custom_id, sys_p, user_p, model, reasoning_effort, reasoning_summary)
+                req       = build_request(
+                    custom_id, sys_p, user_p, model, reasoning_effort, reasoning_summary
+                )
                 requests.append(req)
                 if student_id == example_id and run_n == 1:
                     example_reqs.append(req)
 
-    # Write batch input JSONL
+    # Write batch_input.jsonl
     batch_path = run_folder / "batch_input.jsonl"
     with open(batch_path, "w", encoding="utf-8") as f:
         for req in requests:
@@ -325,7 +339,6 @@ if __name__ == "__main__":
         "reasoning_effort":   reasoning_effort,
         "reasoning_summary":  reasoning_summary,
         "include_feedback":   include_feedback,
-        "include_resources":  include_resources,
         "repetitions":        repetitions,
         "pipelines":          [p["pipeline_id"] for p in pipelines],
         "n_papers":           len(papers),
