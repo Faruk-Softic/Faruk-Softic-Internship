@@ -208,6 +208,8 @@ def build_user_prompt(paper_text: str) -> str:
         "[STUDENT PAPER START]",
         paper_text,
         "[STUDENT PAPER END]",
+        "",
+        "Respond with a JSON object only.",
     ])
 
 
