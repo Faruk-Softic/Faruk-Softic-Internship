@@ -40,22 +40,17 @@ RESOURCE_FILES = {
 EXAMPLE_PAPER_ID = os.environ.get("EXAMPLE_PAPER_ID", "").strip()
 
 
-LLM_ROLE = (
-   "You are an independent grader tasked with grading first scientific papers written by second-year psychology "
-    "students. The course focuses on scientific reasoning and argumentation. Keep in mind that "
-    "these students have not yet learned how to write a full paper (that is the purpose of "
-    "the assignment that you are about to grade) and have only conducted a "
-    "simple literature review. Grade against the provided rubric, "
-    "writing guide, and sample paper — not against publishable-paper standards. Therefore, "
-    "it is possible for a student paper to receive a high grade, even if it does not meet publishable-paper standards. "
-    "An abstract is not required, and its absence must not be penalized, but it can positively affect the grade, if well-written. "
-    "As a general rule, a paper graded between 6.5 and 7.5 is around average. Grades 8-9 are considered "
-    "above average; grades 9 and up are considered excellent. Grades lower than 6.5 are considered "
-    "below average. "
-    "Grades in the Dutch system run from 1 to 10, with 5.5 being the lowest passing grade. "
-    "Your task is to provide as objective and accurate a grade as possible given the rubric "
-    "and resources of the course. "
-    "Being too lenient or too harsh is a disservice to the student and the course. "
+_GENERAL_INSTRUCTIONS = (
+    "# General instructions\n"
+    "You are grading a paper written by a second-year psychology bachelor student as part of a writing course "
+    "focused on scientific reasoning and argumentation. Grade the paper according to the expectations of this "
+    "specific course, not according to the standards of publishable scientific articles or graduate-level writing. "
+    "Base every judgment on evidence from the student's paper and the provided grading materials. "
+    "If an abstract is included, ignore it as abstracts are not graded in this course. "
+    "Assign grades from 1.0 to 10.0 in 0.5-point increments according to the Dutch grading system: "
+    "grades between 1-5 are failing; 5.5 is the lowest passing grade; grades between 6.5-7.5 are average; "
+    "grades between 7.5-9 are above average; grades between 9-10 are excellent. "
+    "Be as accurate and meticulous as possible."
 )
 
 # File loading
@@ -102,8 +97,6 @@ def load_papers(folder: Path) -> dict[str, str]:
 
 # Prompt building
 
-# Explicit prefix map: lang_style checklist keys use prefix "lang_",
-# not "lang_style_", so startswith() on the section key would fail without this.
 _SEC_PREFIX = {
     "intro":      "intro",
     "methods":    "methods",
@@ -118,6 +111,7 @@ def build_system_prompt(
     rubric: str,
     resources: dict[str, str],
     include_feedback: bool,
+    paper_text: str,
 ) -> str:
     """
     Build the full system prompt for a given pipeline.
@@ -129,7 +123,6 @@ def build_system_prompt(
     """
     include_checklist = pipeline.get("include_checklist", False)
     schema            = get_output_schema(include_checklist, include_feedback)
-    role              = LLM_ROLE
 
     # Task instruction block
     if include_checklist:
@@ -139,7 +132,7 @@ def build_system_prompt(
         ]
         step = 2
         if include_feedback:
-            task_steps.append(f"{step}. Write a brief feedback comment explaining your reasoning behind the grade.")
+            task_steps.append(f"{step}. Write a feedback comment explaining your reasoning behind the grade.")
             step += 1
         task_steps.append(
             f"{step}. Assign a numeric grade (1.0-10.0 in 0.5 steps). "
@@ -150,7 +143,7 @@ def build_system_prompt(
     elif include_feedback:
         task_steps = [
             "For each section, work through the following steps in order:",
-            "1. Write a brief feedback comment explaining your reasoning behind the grade.",
+            "1. Write a feedback comment explaining your reasoning behind the grade.",
             "2. Assign a numeric grade (1.0-10.0 in 0.5 steps).",
         ]
     else:
@@ -170,45 +163,54 @@ def build_system_prompt(
         comma = "," if i < len(schema) - 1 else ""
         schema_lines.append(f'  "{key}": {type_hint}{comma}')
 
-    lines = [role, ""]
-
-    lines += [
-        "## Writing Guide",
+    lines = [
+        _GENERAL_INSTRUCTIONS,
+        "",
+        "# Writing guide",
+        "Students were instructed to follow this writing guide.",
+        "[WRITING GUIDE START]",
         resources["writing_guide"],
+        "[WRITING GUIDE END]",
         "",
-        "## Sample Results Section",
+        "# Sample results section",
+        "Students used simulated data and were encouraged to follow the overall structure, reporting style, "
+        "and level of detail illustrated in the sample results section below. However, the sample is not an "
+        "answer key. Do not reward or penalize deviations from the sample unless they omit required information "
+        "or violate the writing guide or grading rubric.",
+        "[SAMPLE RESULTS START]",
         resources["sample_results"],
+        "[SAMPLE RESULTS END]",
         "",
-    ]
-
-    lines += [
-        "## Grading Rubric",
+        "# Grading rubric",
+        "Use the grading rubric as the primary grading standard. Use the writing guide and sample results "
+        "section to interpret the expectations of the assignment. Assign grades from 1.0 to 10.0 in 0.5-point "
+        "increments according to the rubric criteria below.",
+        "[RUBRIC START]",
         rubric,
+        "[RUBRIC END]",
         "",
-        "## Your Task",
-        "Grade the paper section by section using the rubric above.",
-        "",
+        "# Response format",
         *task_steps,
         "",
-        "## Output Format",
         "Respond with a single JSON object. Do not include any text outside the JSON.",
         "Use the exact keys listed below, in the order shown.",
         "",
         "{",
         *schema_lines,
         "}",
+        "",
+        "# Student paper",
+        "Grade the following student paper:",
+        "[STUDENT PAPER START]",
+        paper_text,
+        "[STUDENT PAPER END]",
     ]
     return "\n".join(lines)
-
-
-def build_user_prompt(paper_text: str) -> str:
-    return f"Please grade the following student paper and respond with valid JSON:\n\n{paper_text}"
 
 
 def build_request(
     custom_id: str,
     system_prompt: str,
-    user_prompt: str,
     model: str,
     reasoning_effort: str,
     reasoning_summary: str,
@@ -222,7 +224,7 @@ def build_request(
             "reasoning":    {"effort": reasoning_effort, "summary": reasoning_summary},
             "text":         {"format": {"type": "json_object"}},
             "instructions": system_prompt,
-            "input":        user_prompt,
+            "input":        "",
         },
     }
 
@@ -245,9 +247,7 @@ if __name__ == "__main__":
     print(f"Using run folder: {run_folder}")
 
     cfg = yaml.safe_load((run_folder / "config.yml").read_text(encoding="utf-8"))
-
-    # model has no fallback — raises KeyError immediately if missing from config.yml,
-    # so a missing or misnamed key never silently runs the wrong model.
+    
     model             = cfg["model"]
     reasoning_effort  = cfg.get("reasoning_effort", "medium")
     reasoning_summary = cfg.get("reasoning_summary", "auto")
@@ -303,14 +303,13 @@ if __name__ == "__main__":
             pid    = pipeline["pipeline_id"]
             rubric = rubrics[pipeline["rubric_version"]]
             sys_p  = build_system_prompt(
-                pipeline, rubric, resources, include_feedback
+                pipeline, rubric, resources, include_feedback, paper_text
             )
-            user_p = build_user_prompt(paper_text)
 
             for run_n in range(1, repetitions + 1):
                 custom_id = make_custom_id(run_label, student_id, pid, run_n, repetitions)
                 req       = build_request(
-                    custom_id, sys_p, user_p, model, reasoning_effort, reasoning_summary
+                    custom_id, sys_p, model, reasoning_effort, reasoning_summary
                 )
                 requests.append(req)
                 if student_id == example_id and run_n == 1:
