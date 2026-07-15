@@ -111,7 +111,6 @@ def build_system_prompt(
     rubric: str,
     resources: dict[str, str],
     include_feedback: bool,
-    paper_text: str,
 ) -> str:
     """
     Build the full system prompt for a given pipeline.
@@ -198,19 +197,24 @@ def build_system_prompt(
         "{",
         *schema_lines,
         "}",
-        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_user_prompt(paper_text: str) -> str:
+    return "\n".join([
         "# Student paper",
         "Grade the following student paper:",
         "[STUDENT PAPER START]",
         paper_text,
         "[STUDENT PAPER END]",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 def build_request(
     custom_id: str,
     system_prompt: str,
+    user_prompt: str,
     model: str,
     reasoning_effort: str,
     reasoning_summary: str,
@@ -224,7 +228,7 @@ def build_request(
             "reasoning":    {"effort": reasoning_effort, "summary": reasoning_summary},
             "text":         {"format": {"type": "json_object"}},
             "instructions": system_prompt,
-            "input":        "",
+            "input":        user_prompt,
         },
     }
 
@@ -247,7 +251,7 @@ if __name__ == "__main__":
     print(f"Using run folder: {run_folder}")
 
     cfg = yaml.safe_load((run_folder / "config.yml").read_text(encoding="utf-8"))
-    
+
     model             = cfg["model"]
     reasoning_effort  = cfg.get("reasoning_effort", "medium")
     reasoning_summary = cfg.get("reasoning_summary", "auto")
@@ -303,13 +307,14 @@ if __name__ == "__main__":
             pid    = pipeline["pipeline_id"]
             rubric = rubrics[pipeline["rubric_version"]]
             sys_p  = build_system_prompt(
-                pipeline, rubric, resources, include_feedback, paper_text
+                pipeline, rubric, resources, include_feedback
             )
+            user_p = build_user_prompt(paper_text)
 
             for run_n in range(1, repetitions + 1):
                 custom_id = make_custom_id(run_label, student_id, pid, run_n, repetitions)
                 req       = build_request(
-                    custom_id, sys_p, model, reasoning_effort, reasoning_summary
+                    custom_id, sys_p, user_p, model, reasoning_effort, reasoning_summary
                 )
                 requests.append(req)
                 if student_id == example_id and run_n == 1:
