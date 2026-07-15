@@ -140,7 +140,7 @@ def process_result(
 
     if meta is None:
         print(f"  ⚠  No metadata for '{custom_id}' — skipping.")
-        return Nones
+        return None
     if error := result_line.get("error"):
         print(f"  ✗  API error for '{custom_id}': {error}")
         return None
