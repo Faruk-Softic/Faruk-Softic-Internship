@@ -11,3 +11,5 @@ Meeting preparation document.docx
 backfill_summaries.py
 batches/
 build_prompts_minimal_prompt.py
+cost_calcs.R
+outputs/run-25/terminal_notes.txt
