@@ -13,3 +13,12 @@ batches/
 build_prompts_minimal_prompt.py
 cost_calcs.R
 outputs/run-25/terminal_notes.txt
+outputs/run-20/derived_grades.csv
+outputs/run-25/derived_grades.csv
+outputs/run-26/derived_grades.csv
+outputs/run-27/derived_grades.csv
+outputs/run-final
+verify_checklist_grades.py
+verify_checklist_grades_2.py
+backfill_summaries.py
+analyze_output_tokens.py
